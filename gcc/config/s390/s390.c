@@ -15365,6 +15365,14 @@ s390_option_override_internal (bool main_args_p,
 
   opts->x_s390_arch_flags = processor_flags_table[(int) opts->x_s390_arch];
 
+  /* Default stack format and size options for z/OS */
+  if (TARGET_ZOS)
+    {
+      if (!opts_set->x_s390_zos_stack_format)
+	opts->x_s390_zos_stack_format = F4SA;
+      printf("F4SA = %d, XPLINK = %d, STACK_SIZE = %d\n", opts->x_s390_zos_stack_format == F4SA, opts->x_s390_zos_stack_format == XPLINK, opts->x_s390_zos_initial_stack_size);
+    }
+
   /* Determine processor to tune for.  */
   if (!opts_set->x_s390_tune)
     opts->x_s390_tune = opts->x_s390_arch;

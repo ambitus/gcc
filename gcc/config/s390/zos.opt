@@ -1,0 +1,20 @@
+; Options for the ZOS port of the compiler
+
+HeaderInclude
+config/s390/zos-opts.h
+
+Enum
+Name(stack_format) Type(enum stack_format)
+
+EnumValue
+Enum(stack_format) String(f4sa) Value(F4SA)
+
+EnumValue
+Enum(stack_format) String(xplink) Value(XPLINK)
+
+mstack-format=
+Target RejectNegative Joined Enum(stack_format) ToLower Var(s390_zos_stack_format) Init(F4SA) Save
+
+minitial-stack-size=
+Target RejectNegative Negative(mno-initial-stack-size) Joined UInteger Var(s390_zos_initial_stack_size) Init(1048576) Save
+Initial size of the stack.
