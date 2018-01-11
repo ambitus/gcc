@@ -10740,11 +10740,25 @@ s390_lra_p (void)
   return s390_lra_flag;
 }
 
+static bool
+s390_target_frame_ponter_required (void) {
+  printf("%d\n", TARGET_ZOS);
+
+  if (TARGET_ZOS)
+    return true;
+  else
+    return false;
+}
+
 /* Return true if register FROM can be eliminated via register TO.  */
 
 static bool
 s390_can_eliminate (const int from, const int to)
 {
+  if (TARGET_ZOS) {
+  	/* TODO ... */
+    return true;
+  }
   /* On zSeries machines, we have not marked the base register as fixed.
      Instead, we have an elimination rule BASE_REGNUM -> BASE_REGNUM.
      If a function requires the base register, we say here that this
@@ -10765,12 +10779,15 @@ s390_can_eliminate (const int from, const int to)
     }
 
   /* Everything else must point into the stack frame.  */
+    /*
   gcc_assert (to == STACK_POINTER_REGNUM
-	      || to == HARD_FRAME_POINTER_REGNUM);
+	      || to == HARD_FRAME_POINTER_REGNUM
+	      || to == FRAME_POINTER_REGNUM);
 
   gcc_assert (from == FRAME_POINTER_REGNUM
 	      || from == ARG_POINTER_REGNUM
 	      || from == RETURN_ADDRESS_POINTER_REGNUM);
+	      */
 
   /* Make sure we actually saved the return address.  */
   if (from == RETURN_ADDRESS_POINTER_REGNUM)
@@ -10788,6 +10805,17 @@ HOST_WIDE_INT
 s390_initial_elimination_offset (int from, int to)
 {
   HOST_WIDE_INT offset;
+
+  if (TARGET_ZOS) {
+  	switch (from) {
+  		case STACK_POINTER_REGNUM:
+  			return 136;
+  		case FRAME_POINTER_REGNUM:
+  			return 0;
+  		default:
+  			gcc_unreachable ();
+  	}
+  }
 
   /* ??? Why are we called for non-eliminable pairs?  */
   if (!s390_can_eliminate (from, to))
@@ -12535,29 +12563,36 @@ s390_function_and_libcall_value (machine_mode mode,
 	      || (TARGET_VX_ABI && vector_ret_type_p));
   gcc_assert (GET_MODE_SIZE (mode) <= (TARGET_VX_ABI ? 16 : 8));
 
-  if (TARGET_VX_ABI && vector_ret_type_p)
-    return gen_rtx_REG (mode, FIRST_VEC_ARG_REGNO);
-  else if (TARGET_HARD_FLOAT && SCALAR_FLOAT_MODE_P (mode))
-    return gen_rtx_REG (mode, 16);
-  else if (GET_MODE_SIZE (mode) <= UNITS_PER_LONG
-	   || UNITS_PER_LONG == UNITS_PER_WORD)
-    return gen_rtx_REG (mode, 2);
-  else if (GET_MODE_SIZE (mode) == 2 * UNITS_PER_LONG)
+  if (TARGET_ZOS)
     {
-      /* This case is triggered when returning a 64 bit value with
-	 -m31 -mzarch.  Although the value would fit into a single
-	 register it has to be forced into a 32 bit register pair in
-	 order to match the ABI.  */
-      rtvec p = rtvec_alloc (2);
-
-      RTVEC_ELT (p, 0)
-	= gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 2), const0_rtx);
-      RTVEC_ELT (p, 1)
-	= gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 3), GEN_INT (4));
-
-      return gen_rtx_PARALLEL (mode, p);
+      /* TODO ... */
+      return gen_rtx_REG (mode, 15);
     }
+  else
+    {
+      if (TARGET_VX_ABI && vector_ret_type_p)
+	return gen_rtx_REG (mode, FIRST_VEC_ARG_REGNO);
+      else if (TARGET_HARD_FLOAT && SCALAR_FLOAT_MODE_P (mode))
+	return gen_rtx_REG (mode, 16);
+      else if (GET_MODE_SIZE (mode) <= UNITS_PER_LONG
+	       || UNITS_PER_LONG == UNITS_PER_WORD)
+	return gen_rtx_REG (mode, 2);
+      else if (GET_MODE_SIZE (mode) == 2 * UNITS_PER_LONG)
+	{
+	  /* This case is triggered when returning a 64 bit value with
+	     -m31 -mzarch.  Although the value would fit into a single
+	     register it has to be forced into a 32 bit register pair in
+	     order to match the ABI.  */
+	  rtvec p = rtvec_alloc (2);
 
+	  RTVEC_ELT (p, 0)
+	    = gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 2), const0_rtx);
+	  RTVEC_ELT (p, 1)
+	    = gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 3), GEN_INT (4));
+
+	  return gen_rtx_PARALLEL (mode, p);
+      }
+    }
   gcc_unreachable ();
 }
 
@@ -15365,14 +15400,6 @@ s390_option_override_internal (bool main_args_p,
 
   opts->x_s390_arch_flags = processor_flags_table[(int) opts->x_s390_arch];
 
-  /* Default stack format and size options for z/OS */
-  if (TARGET_ZOS)
-    {
-      if (!opts_set->x_s390_zos_stack_format)
-	opts->x_s390_zos_stack_format = F4SA;
-      printf("F4SA = %d, XPLINK = %d, STACK_SIZE = %d\n", opts->x_s390_zos_stack_format == F4SA, opts->x_s390_zos_stack_format == XPLINK, opts->x_s390_zos_initial_stack_size);
-    }
-
   /* Determine processor to tune for.  */
   if (!opts_set->x_s390_tune)
     opts->x_s390_tune = opts->x_s390_arch;
@@ -16935,6 +16962,9 @@ s390_case_values_threshold (void)
 
 #undef TARGET_CASE_VALUES_THRESHOLD
 #define TARGET_CASE_VALUES_THRESHOLD s390_case_values_threshold
+
+#undef TARGET_FRAME_POINTER_REQUIRED
+#define TARGET_FRAME_POINTER_REQUIRED s390_target_frame_ponter_required
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 
