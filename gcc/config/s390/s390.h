@@ -603,6 +603,19 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
    'fake' hard registers are added or removed.  */
 #define DWARF_FRAME_REGISTERS 34
 
+/* Frame pointer and argument pointer elimination.  */
+
+#define ELIMINABLE_REGS           \
+{{ FRAME_POINTER_REGNUM, STACK_POINTER_REGNUM },    \
+ { FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },   \
+ { ARG_POINTER_REGNUM, STACK_POINTER_REGNUM },      \
+ { ARG_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },   \
+ { RETURN_ADDRESS_POINTER_REGNUM, STACK_POINTER_REGNUM }, \
+ { RETURN_ADDRESS_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },  \
+ { BASE_REGNUM, BASE_REGNUM }}
+
+#define INITIAL_ELIMINATION_OFFSET(FROM, TO, OFFSET) \
+  (OFFSET) = s390_initial_elimination_offset ((FROM), (TO))
 
 /* Stack arguments.  */
 

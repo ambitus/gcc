@@ -10742,8 +10742,6 @@ s390_lra_p (void)
 
 static bool
 s390_target_frame_ponter_required (void) {
-  printf("%d\n", TARGET_ZOS);
-
   if (TARGET_ZOS)
     return true;
   else
@@ -10755,10 +10753,6 @@ s390_target_frame_ponter_required (void) {
 static bool
 s390_can_eliminate (const int from, const int to)
 {
-  if (TARGET_ZOS) {
-  	/* TODO ... */
-    return true;
-  }
   /* On zSeries machines, we have not marked the base register as fixed.
      Instead, we have an elimination rule BASE_REGNUM -> BASE_REGNUM.
      If a function requires the base register, we say here that this
@@ -10779,15 +10773,12 @@ s390_can_eliminate (const int from, const int to)
     }
 
   /* Everything else must point into the stack frame.  */
-    /*
   gcc_assert (to == STACK_POINTER_REGNUM
-	      || to == HARD_FRAME_POINTER_REGNUM
-	      || to == FRAME_POINTER_REGNUM);
+	      || to == HARD_FRAME_POINTER_REGNUM);
 
   gcc_assert (from == FRAME_POINTER_REGNUM
 	      || from == ARG_POINTER_REGNUM
 	      || from == RETURN_ADDRESS_POINTER_REGNUM);
-	      */
 
   /* Make sure we actually saved the return address.  */
   if (from == RETURN_ADDRESS_POINTER_REGNUM)
@@ -10805,17 +10796,6 @@ HOST_WIDE_INT
 s390_initial_elimination_offset (int from, int to)
 {
   HOST_WIDE_INT offset;
-
-  if (TARGET_ZOS) {
-  	switch (from) {
-  		case STACK_POINTER_REGNUM:
-  			return 136;
-  		case FRAME_POINTER_REGNUM:
-  			return 0;
-  		default:
-  			gcc_unreachable ();
-  	}
-  }
 
   /* ??? Why are we called for non-eliminable pairs?  */
   if (!s390_can_eliminate (from, to))

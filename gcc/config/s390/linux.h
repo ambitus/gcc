@@ -194,19 +194,4 @@ along with GCC; see the file COPYING3.  If not see
      38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,  \
      15, 32, 33, 34, 35, 36, 37 }
 
-/* Frame pointer and argument pointer elimination.  */
-
-#define ELIMINABLE_REGS           \
-{{ FRAME_POINTER_REGNUM, STACK_POINTER_REGNUM },    \
- { FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },   \
- { ARG_POINTER_REGNUM, STACK_POINTER_REGNUM },      \
- { ARG_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },   \
- { RETURN_ADDRESS_POINTER_REGNUM, STACK_POINTER_REGNUM }, \
- { RETURN_ADDRESS_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },  \
- { BASE_REGNUM, BASE_REGNUM }}
-
-#define INITIAL_ELIMINATION_OFFSET(FROM, TO, OFFSET) \
-  (OFFSET) = s390_initial_elimination_offset ((FROM), (TO))
-
-
 #endif
