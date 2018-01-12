@@ -116,3 +116,8 @@
 
 #define INITIAL_ELIMINATION_OFFSET(FROM, TO, OFFSET) \
   (OFFSET) = s390_initial_elimination_offset ((FROM), (TO))
+
+/* Stack configurations */
+#define TARGET_ZOS_STACK_F4SA (TARGET_ZOS && s390_zos_stack_format == F4SA)
+#define TARGET_ZOS_STACK_XPLINK (TARGET_ZOS && s390_zos_stack_format == XPLINK)
+

@@ -11423,6 +11423,59 @@ s390_emit_prologue (void)
   int offset;
   int next_fpr = 0;
 
+  if (TARGET_ZOS_STACK_F4SA) {
+    // printf("CFUN dump: "
+    //   "gprs_offset: %d\n"
+    //   "f0_offset: %d\n"
+    //   "f4_offset: %d\n"
+    //   "f8_offset: %d\n"
+    //   "backchain_offset: %d\n"
+    //   "first_save_gpr_slot: %d\n"
+    //   "last_save_gpr_slot: %d\n"
+    //   "first_save_gpr: %d\n"
+    //   "first_restore_gpr: %d\n"
+    //   "last_save_gpr: %d\n"
+    //   "last_restore_gpr: %d\n"
+    //   "fpr_bitmap: %d\n"
+    //   "high_fprs: %d\n"
+    //   "save_return_addr_p: %d\n"
+    //   "frame_size: %d\n",
+    //   cfun_frame_layout.gprs_offset,
+    //   cfun_frame_layout.f0_offset,
+    //   cfun_frame_layout.f4_offset,
+    //   cfun_frame_layout.f8_offset,
+    //   cfun_frame_layout.backchain_offset,
+    //   cfun_frame_layout.first_save_gpr_slot,
+    //   cfun_frame_layout.last_save_gpr_slot,
+    //   cfun_frame_layout.first_save_gpr,
+    //   cfun_frame_layout.first_restore_gpr,
+    //   cfun_frame_layout.last_save_gpr,
+    //   cfun_frame_layout.last_restore_gpr,
+    //   cfun_frame_layout.fpr_bitmap,
+    //   cfun_frame_layout.high_fprs,
+    //   cfun_frame_layout.save_return_addr_p,
+    //   cfun_frame_layout.frame_size);
+
+    // Store registers
+    // emit_insn (save_gprs (hard_frame_pointer_rtx, 8, 0, 3));
+
+    // Chain next block
+    rtx temp_reg_rtx = gen_rtx_REG (Pmode, 15);
+    rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
+    rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
+    emit_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
+    emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
+    emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
+
+    // Initialize next block
+    rtx f4sa_addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
+    emit_move_insn (gen_highpart(Pmode, temp_reg_rtx), GEN_INT (0xC6F40000));
+    emit_insn (gen_iordi3(temp_reg_rtx, gen_lowpart(Pmode, temp_reg_rtx), GEN_INT (0x0000E2C1)));
+    emit_move_insn (f4sa_addr, temp_reg_rtx);
+
+    return;
+  }
+
   /* Choose best register to use for temp use within prologue.
      TPF with profiling must avoid the register 14 - the tracing function
      needs the original contents of r14 to be preserved.  */
