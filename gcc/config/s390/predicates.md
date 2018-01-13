@@ -412,7 +412,7 @@
       if (GET_CODE (elt) != SET
 	  || GET_CODE (SET_DEST (elt)) != REG
 	  || GET_MODE (SET_DEST (elt)) != elt_mode
-	  || REGNO (SET_DEST (elt)) != dest_regno + i
+	  || REGNO (SET_DEST (elt)) != (dest_regno + i) % 16
 	  || GET_CODE (SET_SRC (elt)) != MEM
 	  || GET_MODE (SET_SRC (elt)) != elt_mode
 	  || GET_CODE (XEXP (SET_SRC (elt), 0)) != PLUS
