@@ -1904,6 +1904,7 @@ dwarf2out_frame_debug_expr (rtx expr)
 	      offset -= cur_trace->cfa_store.offset;
 	    else
 	      {
+          printf("Expected: %d, found: %d\n", regno, cur_trace->cfa_temp.reg);
 		gcc_assert (cur_trace->cfa_temp.reg == regno);
 		offset -= cur_trace->cfa_temp.offset;
 	      }

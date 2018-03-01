@@ -9877,7 +9877,7 @@ s390_register_info_gprtofpr ()
   if (crtl->calls_eh_return)
     return;
 
-  for (i = 15; i >= 6; i--)
+  for (i = 15; i >= (TARGET_ZOS_STACK_F4SA ? 0 : 6); i--)
     {
       if (cfun_gpr_save_slot (i) == SAVE_SLOT_NONE)
 	continue;
@@ -9894,7 +9894,7 @@ s390_register_info_gprtofpr ()
 	  /* We only want to use ldgr/lgdr if we can get rid of
 	     stm/lm entirely.  So undo the gpr slot allocation in
 	     case we ran out of FPR save slots.  */
-	  for (j = 6; j <= 15; j++)
+	  for (j = (TARGET_ZOS_STACK_F4SA ? 0 : 6); j <= 15; j++)
 	    if (FP_REGNO_P (cfun_gpr_save_slot (j)))
 	      cfun_gpr_save_slot (j) = SAVE_SLOT_STACK;
 	  break;
@@ -10087,9 +10087,19 @@ s390_register_info ()
 
   memset (cfun_frame_layout.gpr_save_slots, SAVE_SLOT_NONE, 16);
 
-  for (i = 6; i < 16; i++)
-    if (clobbered_regs[i])
-      cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+  if (TARGET_ZOS_STACK_F4SA)
+    {
+      for (i = 0; i < 16; i++)
+        if (clobbered_regs[i])
+          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+    }
+  else
+    {
+      for (i = 6; i < 16; i++)
+        if (clobbered_regs[i])
+          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+    }
+
 
   s390_register_info_stdarg_fpr ();
   s390_register_info_gprtofpr ();
@@ -10132,11 +10142,20 @@ s390_optimize_register_info ()
 	|| cfun_frame_layout.save_return_addr_p
 	|| crtl->calls_eh_return);
 
-  memset (cfun_frame_layout.gpr_save_slots, SAVE_SLOT_NONE, 6);
+  memset (cfun_frame_layout.gpr_save_slots, SAVE_SLOT_NONE, 16);
 
-  for (i = 6; i < 16; i++)
-    if (!clobbered_regs[i])
-      cfun_gpr_save_slot (i) = SAVE_SLOT_NONE;
+  if (TARGET_ZOS_STACK_F4SA)
+    {
+      for (i = 0; i < 16; i++)
+        if (clobbered_regs[i])
+          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+    }
+  else
+    {
+      for (i = 6; i < 16; i++)
+        if (clobbered_regs[i])
+          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+    }
 
   s390_register_info_set_ranges ();
   s390_register_info_stdarg_gpr ();
@@ -11392,6 +11411,101 @@ allocate_stack_space (rtx size, HOST_WIDE_INT last_probe_offset,
   return temp_reg_clobbered_p;
 }
 
+void
+s390_emit_f4sa_prologue (void)
+{
+  // printf("CFUN dump: "
+  //   "gprs_offset: %d\n"
+  //   "f0_offset: %d\n"
+  //   "f4_offset: %d\n"
+  //   "f8_offset: %d\n"
+  //   "backchain_offset: %d\n"
+  //   "first_save_gpr_slot: %d\n"
+  //   "last_save_gpr_slot: %d\n"
+  //   "first_save_gpr: %d\n"
+  //   "first_restore_gpr: %d\n"
+  //   "last_save_gpr: %d\n"
+  //   "last_restore_gpr: %d\n"
+  //   "fpr_bitmap: %d\n"
+  //   "high_fprs: %d\n"
+  //   "save_return_addr_p: %d\n"
+  //   "frame_size: %d\n",
+  //   cfun_frame_layout.gprs_offset,
+  //   cfun_frame_layout.f0_offset,
+  //   cfun_frame_layout.f4_offset,
+  //   cfun_frame_layout.f8_offset,
+  //   cfun_frame_layout.backchain_offset,
+  //   cfun_frame_layout.first_save_gpr_slot,
+  //   cfun_frame_layout.last_save_gpr_slot,
+  //   cfun_frame_layout.first_save_gpr,
+  //   cfun_frame_layout.first_restore_gpr,
+  //   cfun_frame_layout.last_save_gpr,
+  //   cfun_frame_layout.last_restore_gpr,
+  //   cfun_frame_layout.fpr_bitmap,
+  //   cfun_frame_layout.high_fprs,
+  //   cfun_frame_layout.save_return_addr_p,
+  //   cfun_frame_layout.frame_size);
+
+  rtx insn, addr;
+
+  // Store registers
+  if (cfun_frame_layout.first_save_gpr != -1)
+    {
+      int first, last;
+      for (first = 14; first != 13; first = (first + 1) % 16)
+          if (df_regs_ever_live_p (first))
+            break;
+
+      if (first != 13) {
+        for (last = 12; last != 13; last = (last + 15) % 16)
+          if (df_regs_ever_live_p (last))
+            break;
+
+        printf("Saving registers %d to %d at fp + %d\n",
+          first,
+          last,
+          8 + ((first + 2) % 16) * 8);
+
+
+        addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
+        
+        insn = gen_store_multiple (gen_rtx_MEM (Pmode, addr),
+           gen_rtx_REG (Pmode, first),
+           GEN_INT ((last - first + 16) % 16));
+        emit_insn (insn);
+      }
+    }
+
+  // Chain next block
+  rtx temp_reg_rtx = gen_rtx_REG (Pmode, RETURN_REGNUM);
+  rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
+  rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
+  insn = emit_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
+  RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
+
+  // Initialize next block
+  rtx f4sa_addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
+  MEM_VOLATILE_P (f4sa_addr) = 1;
+  insn = emit_move_insn (gen_highpart(Pmode, temp_reg_rtx), GEN_INT (0xC6F40000));
+  RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_insn (gen_iordi3(temp_reg_rtx, gen_lowpart(Pmode, temp_reg_rtx), GEN_INT (0x0000E2C1)));
+  RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_move_insn (f4sa_addr, temp_reg_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
+
+  /* TODO: what is this */
+  if (cfun->machine->base_reg)
+    emit_insn (gen_main_pool (cfun->machine->base_reg));
+
+  emit_insn (gen_blockage ());
+
+  return;
+}
+
 /* Expand the prologue into a bunch of separate insns.  */
 
 void
@@ -11402,59 +11516,13 @@ s390_emit_prologue (void)
   int i;
   int offset;
   int next_fpr = 0;
+  s390_save_gprs_to_fprs();
 
-  if (TARGET_ZOS_STACK_F4SA) {
-    // printf("CFUN dump: "
-    //   "gprs_offset: %d\n"
-    //   "f0_offset: %d\n"
-    //   "f4_offset: %d\n"
-    //   "f8_offset: %d\n"
-    //   "backchain_offset: %d\n"
-    //   "first_save_gpr_slot: %d\n"
-    //   "last_save_gpr_slot: %d\n"
-    //   "first_save_gpr: %d\n"
-    //   "first_restore_gpr: %d\n"
-    //   "last_save_gpr: %d\n"
-    //   "last_restore_gpr: %d\n"
-    //   "fpr_bitmap: %d\n"
-    //   "high_fprs: %d\n"
-    //   "save_return_addr_p: %d\n"
-    //   "frame_size: %d\n",
-    //   cfun_frame_layout.gprs_offset,
-    //   cfun_frame_layout.f0_offset,
-    //   cfun_frame_layout.f4_offset,
-    //   cfun_frame_layout.f8_offset,
-    //   cfun_frame_layout.backchain_offset,
-    //   cfun_frame_layout.first_save_gpr_slot,
-    //   cfun_frame_layout.last_save_gpr_slot,
-    //   cfun_frame_layout.first_save_gpr,
-    //   cfun_frame_layout.first_restore_gpr,
-    //   cfun_frame_layout.last_save_gpr,
-    //   cfun_frame_layout.last_restore_gpr,
-    //   cfun_frame_layout.fpr_bitmap,
-    //   cfun_frame_layout.high_fprs,
-    //   cfun_frame_layout.save_return_addr_p,
-    //   cfun_frame_layout.frame_size);
-
-    // Store registers
-    // emit_insn (save_gprs (hard_frame_pointer_rtx, 8, 0, 3));
-
-    // Chain next block
-    rtx temp_reg_rtx = gen_rtx_REG (Pmode, 15);
-    rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
-    rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-    emit_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
-    emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
-    emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
-
-    // Initialize next block
-    rtx f4sa_addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
-    emit_move_insn (gen_highpart(Pmode, temp_reg_rtx), GEN_INT (0xC6F40000));
-    emit_insn (gen_iordi3(temp_reg_rtx, gen_lowpart(Pmode, temp_reg_rtx), GEN_INT (0x0000E2C1)));
-    emit_move_insn (f4sa_addr, temp_reg_rtx);
-
-    return;
-  }
+  if (TARGET_ZOS_STACK_F4SA)
+    {
+      s390_emit_f4sa_prologue ();
+      return;
+    }
 
   /* Choose best register to use for temp use within prologue.
      TPF with profiling must avoid the register 14 - the tracing function
@@ -11767,6 +11835,35 @@ s390_emit_prologue (void)
     }
 }
 
+void s390_emit_f4sa_epilogue (bool sibcall)
+{
+  rtx return_reg;
+  rtvec p;
+
+  if (sibcall)
+    {
+      sorry("Sibcalls are not implemented for F4SA\n");
+    }
+
+  // Reset to previous DSA
+  rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
+  emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, prev_ptr));
+
+  // Restore return address
+  return_reg = gen_rtx_REG (Pmode, RETURN_REGNUM);
+  rtx return_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 8);
+  emit_move_insn (return_reg, return_ptr);
+
+  // Jump
+  p = rtvec_alloc (2);
+
+  RTVEC_ELT (p, 0) = ret_rtx;
+  RTVEC_ELT (p, 1) = gen_rtx_USE (VOIDmode, return_reg);
+  emit_jump_insn (gen_rtx_PARALLEL (VOIDmode, p));
+
+  return;
+}
+
 /* Expand the epilogue into a bunch of separate insns.  */
 
 void
@@ -11776,6 +11873,12 @@ s390_emit_epilogue (bool sibcall)
   int area_bottom, area_top, offset = 0;
   int next_offset;
   int i;
+
+  if (TARGET_ZOS_STACK_F4SA)
+    {
+      s390_emit_f4sa_epilogue (sibcall);
+      return;
+    }
 
   if (TARGET_TPF_PROFILING)
     {
@@ -12576,6 +12679,8 @@ s390_function_and_libcall_value (machine_mode mode,
 				 const_tree fntype_or_decl,
 				 bool outgoing ATTRIBUTE_UNUSED)
 {
+  if (TARGET_ZOS_STACK_F4SA)
+    return gen_rtx_REG (mode, 15);
   /* For vector return types it is important to use the RET_TYPE
      argument whenever available since the middle-end might have
      changed the mode to a scalar mode.  */
@@ -14019,6 +14124,9 @@ s390_optimize_prologue (void)
 {
   rtx_insn *insn, *new_insn, *next_insn;
 
+  // if (TARGET_ZOS_STACK_F4SA)
+    // return;
+
   /* Do a final recompute of the frame-related data.  */
   s390_optimize_register_info ();
 
@@ -15411,6 +15519,15 @@ s390_option_override_internal (bool main_args_p,
       suffix = "\")";
     }
 
+  /* Fail out for unsupported z/OS ABIs */
+  if (TARGET_ZOS_STACK_XPLINK)
+    {
+      sorry("XPLINK is not yet supported\n");
+    }
+  // if (TARGET_ZOS && !TARGET_SOFT_FLOAT)
+  //   {
+  //     sorry("Hardware floating point is not yet supported on z/OS\n");
+  //   }
 
   /* Architecture mode defaults according to ABI.  */
   if (!(opts_set->x_target_flags & MASK_ZARCH))
