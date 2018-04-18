@@ -38,6 +38,9 @@ along with GCC; see the file COPYING3.  If not see
 #undef  WCHAR_TYPE_SIZE
 #define WCHAR_TYPE_SIZE 32
 
+#define TARGET_ZOS 0
+#define TARGET_ZOS_STACK_F4SA 0
+#define TARGET_ZOS_STACK_XPLINK 0
 
 /* Target specific preprocessor settings.  */
 
