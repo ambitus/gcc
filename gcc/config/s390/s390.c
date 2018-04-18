@@ -1,3 +1,4 @@
+#define DEBUG_F4SA
 /* Subroutines used for code generation on IBM S/390 and zSeries
    Copyright (C) 1999-2018 Free Software Foundation, Inc.
    Contributed by Hartmut Penner (hpenner@de.ibm.com) and
@@ -11414,37 +11415,39 @@ allocate_stack_space (rtx size, HOST_WIDE_INT last_probe_offset,
 void
 s390_emit_f4sa_prologue (void)
 {
-  // printf("CFUN dump: "
-  //   "gprs_offset: %d\n"
-  //   "f0_offset: %d\n"
-  //   "f4_offset: %d\n"
-  //   "f8_offset: %d\n"
-  //   "backchain_offset: %d\n"
-  //   "first_save_gpr_slot: %d\n"
-  //   "last_save_gpr_slot: %d\n"
-  //   "first_save_gpr: %d\n"
-  //   "first_restore_gpr: %d\n"
-  //   "last_save_gpr: %d\n"
-  //   "last_restore_gpr: %d\n"
-  //   "fpr_bitmap: %d\n"
-  //   "high_fprs: %d\n"
-  //   "save_return_addr_p: %d\n"
-  //   "frame_size: %d\n",
-  //   cfun_frame_layout.gprs_offset,
-  //   cfun_frame_layout.f0_offset,
-  //   cfun_frame_layout.f4_offset,
-  //   cfun_frame_layout.f8_offset,
-  //   cfun_frame_layout.backchain_offset,
-  //   cfun_frame_layout.first_save_gpr_slot,
-  //   cfun_frame_layout.last_save_gpr_slot,
-  //   cfun_frame_layout.first_save_gpr,
-  //   cfun_frame_layout.first_restore_gpr,
-  //   cfun_frame_layout.last_save_gpr,
-  //   cfun_frame_layout.last_restore_gpr,
-  //   cfun_frame_layout.fpr_bitmap,
-  //   cfun_frame_layout.high_fprs,
-  //   cfun_frame_layout.save_return_addr_p,
-  //   cfun_frame_layout.frame_size);
+#if 0 //def DEBUG_F4SA
+  printf("CFUN prologue dump: "
+    "gprs_offset: %d\n"
+    "f0_offset: %d\n"
+    "f4_offset: %d\n"
+    "f8_offset: %d\n"
+    "backchain_offset: %d\n"
+    "first_save_gpr_slot: %d\n"
+    "last_save_gpr_slot: %d\n"
+    "first_save_gpr: %d\n"
+    "first_restore_gpr: %d\n"
+    "last_save_gpr: %d\n"
+    "last_restore_gpr: %d\n"
+    "fpr_bitmap: %d\n"
+    "high_fprs: %d\n"
+    "save_return_addr_p: %d\n"
+    "frame_size: %d\n",
+    cfun_frame_layout.gprs_offset,
+    cfun_frame_layout.f0_offset,
+    cfun_frame_layout.f4_offset,
+    cfun_frame_layout.f8_offset,
+    cfun_frame_layout.backchain_offset,
+    cfun_frame_layout.first_save_gpr_slot,
+    cfun_frame_layout.last_save_gpr_slot,
+    cfun_frame_layout.first_save_gpr,
+    cfun_frame_layout.first_restore_gpr,
+    cfun_frame_layout.last_save_gpr,
+    cfun_frame_layout.last_restore_gpr,
+    cfun_frame_layout.fpr_bitmap,
+    cfun_frame_layout.high_fprs,
+    cfun_frame_layout.save_return_addr_p,
+    cfun_frame_layout.frame_size);
+#endif
 
   rtx insn, addr;
 
@@ -11461,10 +11464,12 @@ s390_emit_f4sa_prologue (void)
           if (df_regs_ever_live_p (last))
             break;
 
+#ifdef DEBUG_F4SA
         printf("Saving registers %d to %d at fp + %d\n",
           first,
           last,
           8 + ((first + 2) % 16) * 8);
+#endif
 
 
         addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
@@ -11837,8 +11842,43 @@ s390_emit_prologue (void)
 
 void s390_emit_f4sa_epilogue (bool sibcall)
 {
+  rtx insn, addr;
   rtx return_reg;
   rtvec p;
+
+#if 0 //def DEBUG_F4SA
+  printf("CFUN epilogue dump: "
+    "gprs_offset: %d\n"
+    "f0_offset: %d\n"
+    "f4_offset: %d\n"
+    "f8_offset: %d\n"
+    "backchain_offset: %d\n"
+    "first_save_gpr_slot: %d\n"
+    "last_save_gpr_slot: %d\n"
+    "first_save_gpr: %d\n"
+    "first_restore_gpr: %d\n"
+    "last_save_gpr: %d\n"
+    "last_restore_gpr: %d\n"
+    "fpr_bitmap: %d\n"
+    "high_fprs: %d\n"
+    "save_return_addr_p: %d\n"
+    "frame_size: %d\n",
+    cfun_frame_layout.gprs_offset,
+    cfun_frame_layout.f0_offset,
+    cfun_frame_layout.f4_offset,
+    cfun_frame_layout.f8_offset,
+    cfun_frame_layout.backchain_offset,
+    cfun_frame_layout.first_save_gpr_slot,
+    cfun_frame_layout.last_save_gpr_slot,
+    cfun_frame_layout.first_save_gpr,
+    cfun_frame_layout.first_restore_gpr,
+    cfun_frame_layout.last_save_gpr,
+    cfun_frame_layout.last_restore_gpr,
+    cfun_frame_layout.fpr_bitmap,
+    cfun_frame_layout.high_fprs,
+    cfun_frame_layout.save_return_addr_p,
+    cfun_frame_layout.frame_size);
+#endif
 
   if (sibcall)
     {
@@ -11852,7 +11892,37 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   // Restore return address
   return_reg = gen_rtx_REG (Pmode, RETURN_REGNUM);
   rtx return_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 8);
-  emit_move_insn (return_reg, return_ptr);
+  emit_move_insn (return_reg, gen_rtx_MEM (Pmode, return_ptr));
+
+  // Restore registers
+  if (cfun_frame_layout.first_save_gpr != -1)
+    {
+      int first, last;
+      for (first = 1; first != 13; first = (first + 1) % 16)
+          if (df_regs_ever_live_p (first))
+            break;
+
+      if (first != 13) {
+        for (last = 12; last != 13; last = (last + 15) % 16)
+          if (df_regs_ever_live_p (last))
+            break;
+
+#ifdef DEBUG_F4SA
+        printf("Reload registers %d to %d at fp + %d\n",
+          first,
+          last,
+          8 + ((first + 2) % 16) * 8);
+#endif
+
+
+        addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
+        
+        insn = gen_load_multiple (gen_rtx_REG (Pmode, first),
+	   gen_rtx_MEM (Pmode, addr),
+           GEN_INT ((last - first + 16) % 16));
+        emit_insn (insn);
+      }
+    }
 
   // Jump
   p = rtvec_alloc (2);
