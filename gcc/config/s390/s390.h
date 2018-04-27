@@ -590,7 +590,6 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
 /* Frame registers.  */
 
 #define FRAME_POINTER_REGNUM 34
-#define ARG_POINTER_REGNUM 32
 #define RETURN_ADDRESS_POINTER_REGNUM 35
 
 /* The static chain must be call-clobbered, but not used for

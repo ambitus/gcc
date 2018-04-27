@@ -9687,6 +9687,7 @@ s390_back_chain_rtx (void)
   return chain;
 }
 
+#if TARGET_ZOS==0
 /* Find first call clobbered register unused in a function.
    This could be used as base register in a leaf function
    or for holding the return address before epilogue.  */
@@ -9700,6 +9701,7 @@ find_unused_clobbered_reg (void)
       return i;
   return 0;
 }
+#endif
 
 
 /* Helper function for s390_regs_ever_clobbered.  Sets the fields in DATA for all
@@ -9814,6 +9816,7 @@ s390_regs_ever_clobbered (char regs_ever_clobbered[])
     }
 }
 
+#if TARGET_ZOS==0
 /* Determine the frame area which actually has to be accessed
    in the function epilogue. The values are stored at the
    given pointers AREA_BOTTOM (address of the lowest used stack
@@ -9859,6 +9862,7 @@ s390_frame_area (int *area_bottom, int *area_top)
   *area_bottom = b;
   *area_top = t;
 }
+#endif
 /* Update gpr_save_slots in the frame layout trying to make use of
    FPRs as GPR save slots.
    This is a helper routine of s390_register_info.  */
@@ -10869,6 +10873,7 @@ s390_initial_elimination_offset (int from, int to)
   return offset;
 }
 
+#if TARGET_ZOS==0
 /* Emit insn to save fpr REGNUM at offset OFFSET relative
    to register BASE.  Return generated insn.  */
 
@@ -10898,6 +10903,7 @@ restore_fpr (rtx base, int offset, int regnum)
 
   return emit_move_insn (gen_rtx_REG (DFmode, regnum), addr);
 }
+#endif
 
 /* Return true if REGNO is a global register, but not one
    of the special ones that need to be saved/restored in anyway.  */
@@ -11106,6 +11112,7 @@ s390_load_got (void)
 /* This ties together stack memory (MEM with an alias set of frame_alias_set)
    and the change to the stack pointer.  */
 
+#if TARGET_ZOS==0
 static void
 s390_emit_stack_tie (void)
 {
@@ -11174,6 +11181,7 @@ s390_restore_gprs_from_fprs (void)
       RTX_FRAME_RELATED_P (insn) = 1;
     }
 }
+#endif
 
 
 /* A pass run immediately before shrink-wrapping and prologue and epilogue
@@ -11489,6 +11497,8 @@ s390_emit_f4sa_prologue (void)
   RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
   RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
 
@@ -11516,18 +11526,24 @@ s390_emit_f4sa_prologue (void)
 void
 s390_emit_prologue (void)
 {
-  rtx insn, addr;
-  rtx temp_reg;
-  int i;
-  int offset;
-  int next_fpr = 0;
-  s390_save_gprs_to_fprs();
+#if TARGET_ZOS==1
 
   if (TARGET_ZOS_STACK_F4SA)
     {
       s390_emit_f4sa_prologue ();
       return;
     }
+
+  gcc_unreachable ();
+
+#else
+
+  rtx insn, addr;
+  rtx temp_reg;
+  int i;
+  int offset;
+  int next_fpr = 0;
+  s390_save_gprs_to_fprs();
 
   /* Choose best register to use for temp use within prologue.
      TPF with profiling must avoid the register 14 - the tracing function
@@ -11838,6 +11854,7 @@ s390_emit_prologue (void)
 	 lies between the profiling mechanisms.  */
       emit_insn (gen_blockage ());
     }
+#endif
 }
 
 void s390_emit_f4sa_epilogue (bool sibcall)
@@ -11939,16 +11956,22 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 void
 s390_emit_epilogue (bool sibcall)
 {
-  rtx frame_pointer, return_reg, cfa_restores = NULL_RTX;
-  int area_bottom, area_top, offset = 0;
-  int next_offset;
-  int i;
+#if TARGET_ZOS==1
 
   if (TARGET_ZOS_STACK_F4SA)
     {
       s390_emit_f4sa_epilogue (sibcall);
       return;
     }
+  gcc_unreachable ();
+
+#else
+
+  rtx frame_pointer, return_reg, cfa_restores = NULL_RTX;
+  int area_bottom, area_top, offset = 0;
+  int next_offset;
+  rtvec p;
+  int i;
 
   if (TARGET_TPF_PROFILING)
     {
@@ -12148,6 +12171,7 @@ s390_emit_epilogue (bool sibcall)
 
   if (! sibcall)
     emit_jump_insn (gen_return_use (return_reg));
+#endif
 }
 
 /* Implement TARGET_SET_UP_BY_PROLOGUE.  */
@@ -12615,6 +12639,17 @@ s390_function_arg_advance (cumulative_args_t cum_v, machine_mode mode,
    to pass floating point arguments.  All remaining arguments
    are pushed to the stack.  */
 
+#if TARGET_ZOS==1
+static rtx
+s390_function_arg (cumulative_args_t cum_v ATTRIBUTE_UNUSED,
+		   machine_mode mode ATTRIBUTE_UNUSED,
+		   const_tree type ATTRIBUTE_UNUSED,
+		   bool named ATTRIBUTE_UNUSED)
+{
+  /* On z/OS we pass all arguments on the stack */
+  return NULL_RTX;
+}
+#else
 static rtx
 s390_function_arg (cumulative_args_t cum_v, machine_mode mode,
 		   const_tree type, bool named)
@@ -12674,6 +12709,7 @@ s390_function_arg (cumulative_args_t cum_v, machine_mode mode,
 
   gcc_unreachable ();
 }
+#endif
 
 /* Implement TARGET_FUNCTION_ARG_BOUNDARY.  Vector arguments are
    left-justified when placed on the stack during parameter passing.  */
@@ -12691,6 +12727,7 @@ s390_function_arg_padding (machine_mode mode, const_tree type)
    in a memory buffer whose address is passed by the caller as
    hidden first argument.  */
 
+#if TARGET_ZOS==0
 static bool
 s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
 {
@@ -12719,6 +12756,7 @@ s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
      what's safe to return.  Pretend it's a struct I guess.  */
   return true;
 }
+#endif
 
 /* Function arguments and return values are promoted to word size.  */
 
@@ -12743,14 +12781,25 @@ s390_promote_function_mode (const_tree type, machine_mode mode,
    If RET_TYPE is null, define where to return a (scalar)
    value of mode MODE from a libcall.  */
 
+#if TARGET_ZOS==1
+static rtx
+s390_function_and_libcall_value (machine_mode mode,
+				 const_tree ret_type ATTRIBUTE_UNUSED,
+				 const_tree fntype_or_decl ATTRIBUTE_UNUSED,
+				 bool outgoing ATTRIBUTE_UNUSED)
+{
+  if (TARGET_ZOS_STACK_F4SA)
+    return gen_rtx_REG (mode, 15);
+
+  gcc_unreachable ();
+}
+#else
 static rtx
 s390_function_and_libcall_value (machine_mode mode,
 				 const_tree ret_type,
 				 const_tree fntype_or_decl,
 				 bool outgoing ATTRIBUTE_UNUSED)
 {
-  if (TARGET_ZOS_STACK_F4SA)
-    return gen_rtx_REG (mode, 15);
   /* For vector return types it is important to use the RET_TYPE
      argument whenever available since the middle-end might have
      changed the mode to a scalar mode.  */
@@ -12803,6 +12852,7 @@ s390_function_and_libcall_value (machine_mode mode,
     }
   gcc_unreachable ();
 }
+#endif
 
 /* Define where to return a scalar return value of type RET_TYPE.  */
 
@@ -14002,6 +14052,13 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
   rtx *use = &vec[2];
   rtx *clobber_thunk_reg = &vec[3];
   int i;
+
+#if TARGET_ZOS==1
+  /* On z/OS Load R1 with the arg pointer */
+  emit_move_insn (gen_rtx_REG (Pmode, 1), 
+		  gen_rtx_PLUS (Pmode, stack_pointer_rtx,
+				       GEN_INT (STACK_POINTER_OFFSET)));
+#endif
 
   /* Direct function calls need special treatment.  */
   if (GET_CODE (addr_location) == SYMBOL_REF)
@@ -16937,8 +16994,10 @@ s390_case_values_threshold (void)
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS s390_legitimize_address
 
+#if TARGET_ZOS==0
 #undef TARGET_RETURN_IN_MEMORY
 #define TARGET_RETURN_IN_MEMORY s390_return_in_memory
+#endif
 
 #undef  TARGET_INIT_BUILTINS
 #define TARGET_INIT_BUILTINS s390_init_builtins

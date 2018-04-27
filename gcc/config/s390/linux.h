@@ -118,6 +118,9 @@ along with GCC; see the file COPYING3.  If not see
 #define STACK_POINTER_REGNUM 15
 #undef HARD_FRAME_POINTER_REGNUM
 #define HARD_FRAME_POINTER_REGNUM 11
+#undef ARG_POINTER_REGNUM 
+#define ARG_POINTER_REGNUM 32
+
 /* Only gpr 2, fpr 0, and v24 are ever used as return registers.  */
 #undef FUNCTION_VALUE_REGNO_P
 #define FUNCTION_VALUE_REGNO_P(N)          \
