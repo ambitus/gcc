@@ -1,4 +1,4 @@
-#define DEBUG_F4SA
+//#define DEBUG_F4SA
 /* Subroutines used for code generation on IBM S/390 and zSeries
    Copyright (C) 1999-2018 Free Software Foundation, Inc.
    Contributed by Hartmut Penner (hpenner@de.ibm.com) and
@@ -12784,10 +12784,30 @@ s390_promote_function_mode (const_tree type, machine_mode mode,
 #if TARGET_ZOS==1
 static rtx
 s390_function_and_libcall_value (machine_mode mode,
-				 const_tree ret_type ATTRIBUTE_UNUSED,
+				 const_tree ret_type,
 				 const_tree fntype_or_decl ATTRIBUTE_UNUSED,
 				 bool outgoing ATTRIBUTE_UNUSED)
 {
+  /* For vector return types it is important to use the RET_TYPE
+     argument whenever available since the middle-end might have
+     changed the mode to a scalar mode.  */
+  bool vector_ret_type_p = ((ret_type && VECTOR_TYPE_P (ret_type))
+			    || (!ret_type && VECTOR_MODE_P (mode)));
+
+  /* For normal functions perform the promotion as
+     promote_function_mode would do.  */
+  if (ret_type)
+    {
+      int unsignedp = TYPE_UNSIGNED (ret_type);
+      mode = promote_function_mode (ret_type, mode, &unsignedp,
+				    fntype_or_decl, 1);
+    }
+
+  gcc_assert (GET_MODE_CLASS (mode) == MODE_INT
+	      || SCALAR_FLOAT_MODE_P (mode)
+	      || (TARGET_VX_ABI && vector_ret_type_p));
+  gcc_assert (GET_MODE_SIZE (mode) <= (TARGET_VX_ABI ? 16 : 8));
+
   if (TARGET_ZOS_STACK_F4SA)
     return gen_rtx_REG (mode, 15);
 
