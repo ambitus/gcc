@@ -16,5 +16,5 @@ mstack-format=
 Target RejectNegative Joined Enum(stack_format) ToLower Var(s390_zos_stack_format) Init(F4SA) Save
 
 minitial-stack-size=
-Target RejectNegative Negative(mno-initial-stack-size) Joined UInteger Var(s390_zos_initial_stack_size) Init(1048576) Save
-Initial size of the stack.
+Target RejectNegative Negative(mno-initial-stack-size) Joined UInteger Var(s390_zos_initial_stack_size) Init(1024) Save
+Initial size of the stack in Kbytes.
