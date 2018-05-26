@@ -468,10 +468,6 @@ s390_return_addr_from_memory ()
   return cfun_gpr_save_slot(RETURN_REGNUM) == SAVE_SLOT_STACK;
 }
 
-#if TARGET_ZOS
-static bool s390_zos_is_main = FALSE;
-#endif
-
 
 /* Indicate which ABI has been used for passing vector args.
    0 - no vector type arguments have been passed where the ABI is relevant
@@ -7581,55 +7577,6 @@ s390_asm_output_function_label (FILE *asm_out_file, const char *fname,
     asm_fprintf (asm_out_file,
 		 "\t# post-label NOPs for hotpatch (%d halfwords)\n",
 		 hw_after);
-
-#if TARGET_ZOS
-  // Store registers
-  if (cfun_frame_layout.first_save_gpr != -1)
-    {
-      int first, last;
-      for (first = 14; first != 13; first = (first + 1) % 16)
-          if (df_regs_ever_live_p (first))
-            break;
-
-      if (first != 13) {
-        for (last = 12; last != 13; last = (last + 15) % 16)
-          if (df_regs_ever_live_p (last))
-            break;
-
-#ifdef DEBUG_F4SA
-        printf("Saving registers %d to %d at fp + %d\n",
-          first,
-          last,
-          8 + ((first + 2) % 16) * 8);
-#endif
-
-	asm_fprintf (asm_out_file, 
-		     "\tstmg\t%%r%d,%%r%d,%d(%%r%d)\n",
-		     first, last, 8 + ((first + 2) % 16) * 8,
-		     HARD_FRAME_POINTER_REGNUM);
-      }
-    }
-
-  // If main, obtain stack storage.
-  if (!strcmp (fname, "main"))
-    {
-#ifdef DEBUG_F4SA
-      printf ("output GETMAIN\n");
-#endif
-      s390_zos_is_main = TRUE;
-      asm_fprintf (asm_out_file, "\tla\t%%r0,%d\n",
-      		   s390_zos_initial_stack_size);
-      asm_fprintf (asm_out_file, "\tsll\t%%r0,10\n");
-      asm_fprintf (asm_out_file, "\tla\t%%r15,6\n");
-      asm_fprintf (asm_out_file, "\tllgt\t%%r14,16\n");
-      asm_fprintf (asm_out_file, "\tl\t%%r14,772(%%r14)\n");
-      asm_fprintf (asm_out_file, "\tl\t%%r14,160(%%r14)\n");
-      asm_fprintf (asm_out_file, "\tpc\t0(%%r14)\n");
-      asm_fprintf (asm_out_file, "\tlgr\t%%r13,%%r1\n");
-    }
-  else
-    s390_zos_is_main = FALSE;
-#endif
 }
 
 /* Output machine-dependent UNSPECs occurring in address constant X
@@ -11511,29 +11458,59 @@ s390_emit_f4sa_prologue (void)
     cfun_frame_layout.frame_size);
 #endif
 
-  rtx insn, reg, next_ptr, prev_ptr;
+  rtx insn, addr;
+
+  // Store registers
+  if (cfun_frame_layout.first_save_gpr != -1)
+    {
+      int first, last;
+      for (first = 14; first != 13; first = (first + 1) % 16)
+          if (df_regs_ever_live_p (first))
+            break;
+
+      if (first != 13) {
+        for (last = 12; last != 13; last = (last + 15) % 16)
+          if (df_regs_ever_live_p (last))
+            break;
+
+#ifdef DEBUG_F4SA
+        printf("Saving registers %d to %d at fp + %d\n",
+          first,
+          last,
+          8 + ((first + 2) % 16) * 8);
+#endif
+
+
+        addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
+        
+        insn = gen_store_multiple (gen_rtx_MEM (Pmode, addr),
+           gen_rtx_REG (Pmode, first),
+           GEN_INT ((last - first + 16) % 16));
+        emit_insn (insn);
+      }
+    }
 
   // Chain next block
-  reg = gen_rtx_REG (Pmode, RETURN_REGNUM);
-  next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
-  prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-  insn = emit_move_insn (reg, hard_frame_pointer_rtx);
+  rtx temp_reg_rtx = gen_rtx_REG (Pmode, RETURN_REGNUM);
+  rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
+  rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
+  insn = emit_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
   RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), reg);
+  insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
 
   // Initialize next block
   rtx f4sa_addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
   MEM_VOLATILE_P (f4sa_addr) = 1;
-  insn = emit_move_insn (gen_highpart(Pmode, reg), GEN_INT (0xC6F40000));
+  insn = emit_move_insn (gen_highpart(Pmode, temp_reg_rtx), GEN_INT (0xC6F40000));
   RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_insn (gen_iordi3(reg, gen_lowpart(Pmode, reg), GEN_INT (0x0000E2C1)));
+  insn = emit_insn (gen_iordi3(temp_reg_rtx, gen_lowpart(Pmode, temp_reg_rtx), GEN_INT (0x0000E2C1)));
   RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_move_insn (f4sa_addr, reg);
+  insn = emit_move_insn (f4sa_addr, temp_reg_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
 
   /* TODO: what is this */
@@ -11924,30 +11901,6 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   if (sibcall)
     {
       sorry("Sibcalls are not implemented for F4SA\n");
-    }
-
-  // If main, release stack storage.
-  if (s390_zos_is_main)
-    {
-        rtx reg, ptr;
-
-#ifdef DEBUG_F4SA
-	printf ("output PUTMAIN\n");
-#endif
-	s390_zos_is_main = FALSE;
-	reg = gen_rtx_REG (SImode, 0);
-	emit_move_insn (reg, GEN_INT (s390_zos_initial_stack_size));
-	insn = emit_insn (gen_ashlsi3(reg, reg, GEN_INT (10))); 
-	emit_move_insn (gen_rtx_REG (SImode, 15), GEN_INT (3));
-
-	reg = gen_rtx_REG (Pmode, 14);
-	emit_move_insn (reg, GEN_INT (16));
-	ptr = plus_constant (Pmode, reg, 772);
-	emit_move_insn (reg, gen_rtx_MEM (Pmode, ptr));
-	ptr = plus_constant (Pmode, reg, 204);
-	emit_move_insn (reg, gen_rtx_MEM (Pmode, ptr));
-	ptr = plus_constant (Pmode, reg, 0);
-	emit_insn (gen_pcall (gen_rtx_MEM (SImode, ptr)));
     }
 
   // Reset to previous DSA
