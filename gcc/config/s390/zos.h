@@ -45,6 +45,9 @@
 #undef FUNCTION_VALUE_REGNO_P
 #define FUNCTION_VALUE_REGNO_P(N) ((N) == 15)
 
+#undef  TARGET_ASM_FUNCTION_END_PROLOGUE
+#define TARGET_ASM_FUNCTION_END_PROLOGUE s390_asm_function_end_prologue
+
 /* Set up fixed registers and calling convention:
 
    GPRs 0-10 are scratch, call-saved.

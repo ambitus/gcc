@@ -11421,6 +11421,37 @@ allocate_stack_space (rtx size, HOST_WIDE_INT last_probe_offset,
   return temp_reg_clobbered_p;
 }
 
+#if TARGET_ZOS==1
+/* Report accumulated outgoing arguments size.  */
+
+static inline int
+s390_outgoing_args_size (void)
+{
+  return ACCUMULATE_OUTGOING_ARGS ? crtl->outgoing_args_size : 0;
+}
+
+/* Implement `TARGET_ASM_FUNCTION_END_PROLOGUE'.  */
+/* Output NAB initialization at end of function prologue.  */
+
+static void
+s390_asm_function_end_prologue (FILE *file)
+{
+  if (ACCUMULATE_OUTGOING_ARGS)
+    fprintf (file, "/* outgoing args size = %d */\n",
+             s390_outgoing_args_size());
+
+  fprintf (file, "/* frame size = " HOST_WIDE_INT_PRINT_DEC " */\n",
+           get_frame_size());
+
+  fprintf (file,
+	   "\tlghi\t%%r14," HOST_WIDE_INT_PRINT_DEC "\t/* set up NAB */\n",
+           s390_outgoing_args_size() + get_frame_size() + STACK_POINTER_OFFSET);
+  fprintf (file, "\talgr\t%%r14,%%r13\n");
+  fprintf (file, "\tstg\t%%r14,%d(%%r13)\n", STACK_POINTER_OFFSET - 8);
+
+}
+#endif
+
 void
 s390_emit_f4sa_prologue (void)
 {
@@ -14079,6 +14110,12 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
   emit_move_insn (gen_rtx_REG (Pmode, 1), 
 		  gen_rtx_PLUS (Pmode, stack_pointer_rtx,
 				       GEN_INT (STACK_POINTER_OFFSET)));
+
+  /* Set up NAB pointer */
+  rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
+  rtx src = gen_rtx_MEM (BLKmode, plus_constant (Pmode, reg, 144));
+  rtx dst = gen_rtx_MEM (BLKmode, plus_constant (Pmode, reg, 136));
+  emit_insn (gen_movmem_short (dst, src, GEN_INT (7)));
 #endif
 
   /* Direct function calls need special treatment.  */
