@@ -11421,6 +11421,35 @@ allocate_stack_space (rtx size, HOST_WIDE_INT last_probe_offset,
   return temp_reg_clobbered_p;
 }
 
+/* allocate_stack code, support alloca */
+
+void
+s390_allocate_stack (rtx op0, rtx op1)
+{
+#if TARGET_ZOS==1
+  rtx want = gen_reg_rtx (Pmode);
+  rtx tmp = gen_reg_rtx (Pmode);
+  rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
+  rtx nab = gen_rtx_MEM (Pmode, plus_constant (Pmode, reg, 144));
+
+  emit_move_insn (tmp, op1);
+  emit_insn (gen_adddi3 (tmp, tmp, nab));
+  emit_move_insn (nab, tmp);
+
+  emit_move_insn (op0, virtual_stack_dynamic_rtx);
+  emit_move_insn (tmp, op1);
+  emit_insn (gen_adddi3 (want, stack_pointer_rtx, tmp));
+  emit_move_insn (stack_pointer_rtx, want);
+#else
+  rtx temp = gen_reg_rtx (Pmode);
+
+  emit_move_insn (temp, s390_back_chain_rtx ());
+  anti_adjust_stack (op1);
+  emit_move_insn (s390_back_chain_rtx (), temp);
+  emit_move_insn (op0, virtual_stack_dynamic_rtx);
+#endif
+}
+
 #if TARGET_ZOS==1
 /* Report accumulated outgoing arguments size.  */
 
@@ -11529,8 +11558,12 @@ s390_emit_f4sa_prologue (void)
   RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
   RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
+
+  insn = emit_move_insn (stack_pointer_rtx, GEN_INT (get_frame_size()));
   RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_insn (gen_adddi3 (stack_pointer_rtx, stack_pointer_rtx, hard_frame_pointer_rtx));
+  RTX_FRAME_RELATED_P (insn) = 1;
+
   insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
 

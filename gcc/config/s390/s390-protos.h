@@ -51,6 +51,9 @@ extern bool s390_hard_regno_rename_ok (unsigned int, unsigned int);
 extern int s390_class_max_nregs (enum reg_class, machine_mode);
 extern bool s390_function_arg_vector (machine_mode, const_tree);
 extern bool s390_return_addr_from_memory(void);
+
+extern void s390_allocate_stack (rtx op0, rtx op1);
+
 #if S390_USE_TARGET_ATTRIBUTE
 extern tree s390_valid_target_attribute_tree (tree args,
 					      struct gcc_options *opts,

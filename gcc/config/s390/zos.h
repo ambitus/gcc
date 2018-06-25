@@ -48,6 +48,9 @@
 #undef  TARGET_ASM_FUNCTION_END_PROLOGUE
 #define TARGET_ASM_FUNCTION_END_PROLOGUE s390_asm_function_end_prologue
 
+#undef STACK_GROWS_DOWNWARD
+#define STACK_GROWS_DOWNWARD 0
+
 /* Set up fixed registers and calling convention:
 
    GPRs 0-10 are scratch, call-saved.
