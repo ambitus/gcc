@@ -11980,7 +11980,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   if (cfun_frame_layout.first_save_gpr != -1)
     {
       int first, last;
-      for (first = 1; first != 13; first = (first + 1) % 16)
+      for (first = 0; first != 13; first = (first + 1) % 16)
           if (df_regs_ever_live_p (first))
             break;
 
