@@ -11545,7 +11545,7 @@ s390_emit_f4sa_prologue (void)
         
         insn = gen_store_multiple (gen_rtx_MEM (Pmode, addr),
            gen_rtx_REG (Pmode, first),
-           GEN_INT ((last - first + 16) % 16));
+           GEN_INT ((last - first + 17) % 16));
         emit_insn (insn);
       }
     }
@@ -12001,7 +12001,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
         
         insn = gen_load_multiple (gen_rtx_REG (Pmode, first),
 	   gen_rtx_MEM (Pmode, addr),
-           GEN_INT ((last - first + 16) % 16));
+           GEN_INT ((last - first + 17) % 16));
         emit_insn (insn);
       }
     }
