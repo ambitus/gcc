@@ -8437,7 +8437,9 @@ find_constant_pool_ref (rtx x, rtx *ref)
       return;
     }
 
-  fmt = GET_RTX_FORMAT (GET_CODE (x));
+  if ((fmt = GET_RTX_FORMAT (GET_CODE (x))) == NULL)
+    return;
+
   for (i = GET_RTX_LENGTH (GET_CODE (x)) - 1; i >= 0; i--)
     {
       if (fmt[i] == 'e')
@@ -11547,12 +11549,12 @@ s390_emit_f4sa_prologue (void)
           8 + ((first + 2) % 16) * 8);
 #endif
 
-
         addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
         
-        insn = emit_insn (gen_store_multiple (gen_rtx_MEM (Pmode, addr),
-					 gen_rtx_REG (Pmode, first),
-					 GEN_INT ((last - first + 17) % 16)));
+        insn = gen_store_multiple (gen_rtx_MEM (Pmode, addr),
+				   gen_rtx_REG (Pmode, first),
+				   GEN_INT ((last - first + 17) % 16));
+	emit_insn (insn);
       }
     }
 
@@ -11560,28 +11562,29 @@ s390_emit_f4sa_prologue (void)
   rtx temp_reg_rtx = gen_rtx_REG (Pmode, RETURN_REGNUM);
   rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
   rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-  insn = emit_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
-  RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
+  insn = gen_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
+  emit_insn (insn);
+
+  insn = gen_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
+  add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
+  emit_insn (insn);
   RTX_FRAME_RELATED_P (insn) = 1;
 
   insn = emit_move_insn (stack_pointer_rtx, GEN_INT (get_frame_size()));
   RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_insn (gen_adddi3 (stack_pointer_rtx, stack_pointer_rtx, hard_frame_pointer_rtx));
+  insn = emit_insn (gen_adddi3 (stack_pointer_rtx, stack_pointer_rtx,
+				hard_frame_pointer_rtx));
+  add_reg_note (insn, REG_CFA_DEF_CFA, stack_pointer_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
 
   insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
-  RTX_FRAME_RELATED_P (insn) = 1;
 
   // Initialize next block
   rtx f4sa_addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
   MEM_VOLATILE_P (f4sa_addr) = 1;
   insn = emit_move_insn (gen_highpart(Pmode, temp_reg_rtx), GEN_INT (0xC6F40000));
-  RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_insn (gen_iordi3(temp_reg_rtx, gen_lowpart(Pmode, temp_reg_rtx), GEN_INT (0x0000E2C1)));
-  RTX_FRAME_RELATED_P (insn) = 1;
   insn = emit_move_insn (f4sa_addr, temp_reg_rtx);
-  RTX_FRAME_RELATED_P (insn) = 1;
 
   /* TODO: what is this */
   if (cfun->machine->base_reg)
@@ -11930,7 +11933,7 @@ s390_emit_prologue (void)
 
 void s390_emit_f4sa_epilogue (bool sibcall)
 {
-  rtx addr;
+  rtx addr, insn;
   rtx return_reg;
   rtvec p;
 
@@ -11976,12 +11979,16 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
   // Reset to previous DSA
   rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-  emit_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, prev_ptr));
+  insn = gen_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, prev_ptr));
+  add_reg_note (insn, REG_CFA_RESTORE, hard_frame_pointer_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
+  emit_insn (insn);
 
   // Restore return address
   return_reg = gen_rtx_REG (Pmode, RETURN_REGNUM);
   rtx return_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 8);
-  emit_move_insn (return_reg, gen_rtx_MEM (Pmode, return_ptr));
+  insn = gen_move_insn (return_reg, gen_rtx_MEM (Pmode, return_ptr));
+  emit_insn (insn);
 
   // Restore registers
 
@@ -12012,9 +12019,10 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
         addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
         
-        emit_insn (gen_load_multiple (gen_rtx_REG (Pmode, first),
-				      gen_rtx_MEM (Pmode, addr),
-				      GEN_INT ((last - first + 17) % 16)));
+        insn = gen_load_multiple (gen_rtx_REG (Pmode, first),
+				  gen_rtx_MEM (Pmode, addr),
+				  GEN_INT ((last - first + 17) % 16));
+	emit_insn (insn);
       }
     }
 
