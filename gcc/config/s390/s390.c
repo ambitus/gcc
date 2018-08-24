@@ -11580,11 +11580,13 @@ s390_emit_f4sa_prologue (void)
   insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
 
   // Initialize next block
-  rtx f4sa_addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
+  temp_reg_rtx = gen_rtx_REG (SImode, RETURN_REGNUM);
+  rtx f4sa_addr = gen_rtx_MEM (SImode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
   MEM_VOLATILE_P (f4sa_addr) = 1;
-  insn = emit_move_insn (gen_highpart(Pmode, temp_reg_rtx), GEN_INT (0xC6F40000));
-  insn = emit_insn (gen_iordi3(temp_reg_rtx, gen_lowpart(Pmode, temp_reg_rtx), GEN_INT (0x0000E2C1)));
-  insn = emit_move_insn (f4sa_addr, temp_reg_rtx);
+  insn = emit_move_insn (temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0xC6F40000));
+  insn = gen_iordi3 (temp_reg_rtx, temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0x0000E2C1));
+  emit_insn (insn);
+  insn = emit_move_insn (f4sa_addr, gen_lowpart(SImode, temp_reg_rtx));
 
   /* TODO: what is this */
   if (cfun->machine->base_reg)
