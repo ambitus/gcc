@@ -11529,6 +11529,7 @@ s390_emit_f4sa_prologue (void)
   df_set_regs_ever_live (11, 1);
   df_set_regs_ever_live (12, 1);
   df_set_regs_ever_live (13, 1);
+  df_set_regs_ever_live (14, 1);
 
   if (cfun_frame_layout.first_save_gpr != -1)
     {
@@ -11580,7 +11581,7 @@ s390_emit_f4sa_prologue (void)
   insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
 
   // Initialize next block
-  temp_reg_rtx = gen_rtx_REG (SImode, RETURN_REGNUM);
+  temp_reg_rtx = gen_rtx_REG (DImode, RETURN_REGNUM);
   rtx f4sa_addr = gen_rtx_MEM (SImode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
   MEM_VOLATILE_P (f4sa_addr) = 1;
   insn = emit_move_insn (temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0xC6F40000));
