@@ -35,7 +35,7 @@
 #undef HARD_FRAME_POINTER_REGNUM
 #define HARD_FRAME_POINTER_REGNUM 13
 #undef ARG_POINTER_REGNUM
-#define ARG_POINTER_REGNUM 32
+#define ARG_POINTER_REGNUM 1
 
 #undef STACK_POINTER_OFFSET
 #define STACK_POINTER_OFFSET 152
@@ -69,7 +69,7 @@
    All non-FP vector registers are call-clobbered v16-v31.  */
 
 #define FIXED_REGISTERS				\
-{ 0, 0, 0, 0, 					\
+{ 0, 1, 0, 0, 					\
   0, 0, 0, 0, 					\
   0, 0, 0, 1, 					\
   1, 1, 1, 0,					\
@@ -85,7 +85,7 @@
   0, 0, 0, 0 }
 
 #define CALL_USED_REGISTERS			\
-{ 0, 0, 0, 0, 					\
+{ 1, 1, 0, 0, 					\
   0, 0, 0, 0, 					\
   0, 0, 0, 1, 					\
   1, 1, 1, 1,					\
@@ -101,7 +101,7 @@
   1, 1, 1, 1 }
 
 #define CALL_REALLY_USED_REGISTERS		\
-{ 0, 0, 0, 0, 	/* r0 - r15 */			\
+{ 1, 0, 0, 0, 	/* r0 - r15 */			\
   0, 0, 0, 0, 					\
   0, 0, 0, 0, 					\
   0, 0, 0, 0,					\
@@ -124,3 +124,7 @@
      38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 	\
      15, 32, 33, 34, 35, 36, 37 }
 
+#undef ELIMINABLE_REGS
+#define ELIMINABLE_REGS           \
+{{ FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM }, \
+ { STACK_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM }}

@@ -10803,9 +10803,12 @@ s390_can_eliminate (const int from, const int to)
   gcc_assert (to == STACK_POINTER_REGNUM
 	      || to == HARD_FRAME_POINTER_REGNUM);
 
+#if TARGET_ZOS==1
+#else
   gcc_assert (from == FRAME_POINTER_REGNUM
 	      || from == ARG_POINTER_REGNUM
 	      || from == RETURN_ADDRESS_POINTER_REGNUM);
+#endif
 
   /* Make sure we actually saved the return address.  */
   if (from == RETURN_ADDRESS_POINTER_REGNUM)
@@ -10830,6 +10833,10 @@ s390_initial_elimination_offset (int from, int to)
 
   switch (from)
     {
+    case STACK_POINTER_REGNUM:
+      offset = 0;
+      break;
+
     case FRAME_POINTER_REGNUM:
       offset = (get_frame_size()
 		+ STACK_POINTER_OFFSET
@@ -11571,12 +11578,7 @@ s390_emit_f4sa_prologue (void)
   emit_insn (insn);
   RTX_FRAME_RELATED_P (insn) = 1;
 
-  insn = emit_move_insn (stack_pointer_rtx, GEN_INT (get_frame_size()));
-  RTX_FRAME_RELATED_P (insn) = 1;
-  insn = emit_insn (gen_adddi3 (stack_pointer_rtx, stack_pointer_rtx,
-				hard_frame_pointer_rtx));
-  add_reg_note (insn, REG_CFA_DEF_CFA, stack_pointer_rtx);
-  RTX_FRAME_RELATED_P (insn) = 1;
+  insn = emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
 
   insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
 
@@ -14163,7 +14165,8 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 
 #if TARGET_ZOS==1
   /* On z/OS Load R1 with the arg pointer */
-  emit_move_insn (gen_rtx_REG (Pmode, 1), 
+  rtx arg_reg = gen_rtx_REG (Pmode, 1);
+  emit_move_insn (arg_reg,
 		  gen_rtx_PLUS (Pmode, stack_pointer_rtx,
 				       GEN_INT (STACK_POINTER_OFFSET)));
 
@@ -14249,6 +14252,10 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
   if (retaddr_reg != NULL_RTX)
     {
       *clobber_ret_reg = gen_rtx_CLOBBER (VOIDmode, retaddr_reg);
+#if TARGET_ZOS==1
+      rtx use_f4sa = gen_rtx_USE (VOIDmode, arg_reg);
+      emit_insn (use_f4sa);
+#endif
 
       if (tls_call != NULL_RTX)
 	*use = gen_rtx_USE (VOIDmode, tls_call);
