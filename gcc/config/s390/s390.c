@@ -13006,6 +13006,34 @@ s390_libcall_value (machine_mode mode, const_rtx fun ATTRIBUTE_UNUSED)
    saves all registers used for argument passing into this
    area if the function uses variable arguments.  */
 
+#if TARGET_ZOS==1
+static tree
+s390_build_builtin_va_list (void)
+{
+  tree f_pos, record, type_decl;
+
+  record = lang_hooks.types.make_type (RECORD_TYPE);
+
+  type_decl =
+    build_decl (BUILTINS_LOCATION,
+		TYPE_DECL, get_identifier ("__va_list_tag"), record);
+
+  f_pos = build_decl (BUILTINS_LOCATION,
+		      FIELD_DECL, get_identifier ("__pos"),
+		      long_integer_type_node);
+
+  DECL_FIELD_CONTEXT (f_pos) = record;
+
+  TYPE_STUB_DECL (record) = type_decl;
+  TYPE_NAME (record) = type_decl;
+  TYPE_FIELDS (record) = f_pos;
+
+  layout_type (record);
+
+  /* The correct type is an array type of one element.  */
+  return build_array_type (record, build_index_type (size_zero_node));
+}
+#else
 static tree
 s390_build_builtin_va_list (void)
 {
@@ -13050,6 +13078,7 @@ s390_build_builtin_va_list (void)
   /* The correct type is an array type of one element.  */
   return build_array_type (record, build_index_type (size_zero_node));
 }
+#endif
 
 /* Implement va_start by filling the va_list structure VALIST.
    STDARG_P is always true, and ignored.
@@ -13064,6 +13093,40 @@ s390_build_builtin_va_list (void)
        holds the offset of the first anonymous stack argument
        (relative to the virtual arg pointer).  */
 
+#if TARGET_ZOS==1
+static void
+s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
+{
+  rtx reg;
+  rtx_insn *seq;
+
+  reg = gen_reg_rtx (Pmode);
+  cfun->machine->zos_varargs_pointer = reg;
+
+  start_sequence ();
+  emit_move_insn (reg, gen_rtx_REG (Pmode, ARG_POINTER_REGNUM));
+  seq = get_insns ();
+  end_sequence ();
+
+  push_topmost_sequence ();
+  emit_insn_after (seq, entry_of_function ());
+  pop_topmost_sequence ();
+
+  tree f_pos;
+  tree pos, t;
+
+  f_pos = TYPE_FIELDS (TREE_TYPE (va_list_type_node));
+
+  valist = build_simple_mem_ref (valist);
+  pos = build3 (COMPONENT_REF, TREE_TYPE (f_pos), valist, f_pos, NULL_TREE);
+
+  t = fold_build_pointer_plus_hwi (make_tree(TREE_TYPE(pos), cfun->machine->zos_varargs_pointer), INTVAL (crtl->args.arg_offset_rtx));
+  t = build2 (MODIFY_EXPR, TREE_TYPE (pos), pos, t);
+
+  TREE_SIDE_EFFECTS (t) = 1;
+  expand_expr (t, const0_rtx, VOIDmode, EXPAND_NORMAL);
+}
+#else
 static void
 s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
 {
@@ -13163,6 +13226,7 @@ s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
       expand_expr (t, const0_rtx, VOIDmode, EXPAND_NORMAL);
     }
 }
+#endif
 
 /* Implement va_arg by updating the va_list structure
    VALIST as required to retrieve an argument of type
@@ -13191,6 +13255,39 @@ s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
        ret = **args.overflow_arg_area++;
    } */
 
+#if TARGET_ZOS==1
+static tree
+s390_gimplify_va_arg (tree valist, tree type, gimple_seq *pre_p,
+		      gimple_seq *post_p ATTRIBUTE_UNUSED)
+{
+  tree f_pos;
+  tree pos, t;
+  tree addr = create_tmp_var (ptr_type_node, "addr");
+  long size;
+  
+  f_pos = TYPE_FIELDS (TREE_TYPE (va_list_type_node));
+
+  pos = build3 (COMPONENT_REF, TREE_TYPE (f_pos), valist, f_pos, NULL_TREE);
+
+  size = int_size_in_bytes (type);
+  t = fold_build_pointer_plus_hwi (pos, UNITS_PER_LONG - size);
+
+  gimplify_expr (&t, pre_p, NULL, is_gimple_val, fb_rvalue);
+
+  gimplify_assign (addr, t, pre_p);
+
+  /* Update counter */
+  t = fold_build_pointer_plus_hwi (t, size);
+
+  gimplify_assign (pos, t, pre_p);
+
+  /* Set types */
+  t = build_pointer_type_for_mode (type, ptr_mode, true);
+  addr = fold_convert (t, addr);
+
+  return build_va_arg_indirect_ref (addr);
+}
+#else
 static tree
 s390_gimplify_va_arg (tree valist, tree type, gimple_seq *pre_p,
 		      gimple_seq *post_p ATTRIBUTE_UNUSED)
@@ -13383,6 +13480,7 @@ s390_gimplify_va_arg (tree valist, tree type, gimple_seq *pre_p,
 
   return build_va_arg_indirect_ref (addr);
 }
+#endif
 
 /* Emit rtl for the tbegin or tbegin_retry (RETRY != NULL_RTX)
    expanders.
@@ -14105,6 +14203,9 @@ s390_call_saved_register_used (tree call_expr)
 static bool
 s390_function_ok_for_sibcall (tree decl, tree exp)
 {
+#if TARGET_ZOS == 1
+  return false;
+#endif
   /* The TPF epilogue uses register 1.  */
   if (TARGET_TPF_PROFILING)
     return false;
