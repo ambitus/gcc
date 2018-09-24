@@ -7458,6 +7458,7 @@ else
 
   case $target in
     powerpc*-*-linux* | i?86*-*-linux* | x86_64*-*-linux* | s390*-*-linux* | \
+    s390*-*-zos* | \
     i?86*-*-elfiamcu | i?86*-*-gnu* | \
     i?86*-*-mingw* | x86_64*-*-mingw* | \
     i?86*-*-cygwin* | x86_64*-*-cygwin*)
@@ -29302,6 +29303,7 @@ case "$target" in
   powerpc*-*-linux* | \
   sparc*-*-linux* | \
   s390*-*-linux* | \
+  s390*-*-zos* | \
   alpha*-*-linux*)
 
 # Check whether --with-long-double-128 was given.

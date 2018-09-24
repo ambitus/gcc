@@ -386,6 +386,7 @@ case "$target" in
   powerpc*-*-linux* | \
   sparc*-*-linux* | \
   s390*-*-linux* | \
+  s390*-*-zos* | \
   alpha*-*-linux*)
   AC_TRY_COMPILE(, [
 #if !defined __LONG_DOUBLE_128__ || (defined(__sparc__) && defined(__arch64__))

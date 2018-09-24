@@ -12875,7 +12875,7 @@ s390_promote_function_mode (const_tree type, machine_mode mode,
 static rtx
 s390_function_and_libcall_value (machine_mode mode,
 				 const_tree ret_type,
-				 const_tree fntype_or_decl ATTRIBUTE_UNUSED,
+				 const_tree fntype_or_decl,
 				 bool outgoing ATTRIBUTE_UNUSED)
 {
   /* For vector return types it is important to use the RET_TYPE

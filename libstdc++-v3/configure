@@ -79446,6 +79446,7 @@ case "$target" in
   powerpc*-*-linux* | \
   sparc*-*-linux* | \
   s390*-*-linux* | \
+  s390*-*-zos* | \
   alpha*-*-linux*)
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */

@@ -5967,6 +5967,7 @@ case "$target" in
   powerpc*-*-linux* | \
   sparc*-*-linux* | \
   s390*-*-linux* | \
+  s390*-*-zos* | \
   alpha*-*-linux*)
     AC_ARG_WITH(long-double-128,
       [AS_HELP_STRING([--with-long-double-128],
