@@ -12817,7 +12817,6 @@ s390_function_arg_padding (machine_mode mode, const_tree type)
    in a memory buffer whose address is passed by the caller as
    hidden first argument.  */
 
-#if TARGET_ZOS==0
 static bool
 s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
 {
@@ -12846,7 +12845,6 @@ s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
      what's safe to return.  Pretend it's a struct I guess.  */
   return true;
 }
-#endif
 
 /* Function arguments and return values are promoted to word size.  */
 
@@ -17216,10 +17214,8 @@ s390_case_values_threshold (void)
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS s390_legitimize_address
 
-#if TARGET_ZOS==0
 #undef TARGET_RETURN_IN_MEMORY
 #define TARGET_RETURN_IN_MEMORY s390_return_in_memory
-#endif
 
 #undef  TARGET_INIT_BUILTINS
 #define TARGET_INIT_BUILTINS s390_init_builtins

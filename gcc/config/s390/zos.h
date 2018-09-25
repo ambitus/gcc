@@ -1,3 +1,13 @@
+#undef  SIZE_TYPE
+#define SIZE_TYPE "long unsigned int"
+#undef  PTRDIFF_TYPE
+#define PTRDIFF_TYPE (TARGET_64BIT ? "long int" : "int")
+
+#undef  WCHAR_TYPE
+#define WCHAR_TYPE "int"
+#undef  WCHAR_TYPE_SIZE
+#define WCHAR_TYPE_SIZE 32
+
 #undef TARGET_OS_CPP_BUILTINS
 #define TARGET_OS_CPP_BUILTINS()	\
   do					\
@@ -6,6 +16,39 @@
     }					\
   while (0)
 
+#undef  ASM_SPEC
+#define ASM_SPEC				\
+  "%{m31&m64}%{mesa&mzarch}%{march=z*}"	\
+  "%{march=arch3:-march=g5}"			\
+  "%{march=arch5:-march=z900}"			\
+  "%{march=arch6:-march=z990}"			\
+  "%{march=arch7:-march=z9-ec}"		\
+  "%{march=arch8:-march=z10}"			\
+  "%{march=arch9:-march=z196}"			\
+  "%{march=arch10:-march=zEC12}"		\
+  "%{march=arch11:-march=z13}"
+
+#ifdef DEFAULT_TARGET_64BIT
+#define MULTILIB_DEFAULTS { "m64" }
+#else
+#define MULTILIB_DEFAULTS { "m31" }
+#endif
+
+/* TODO: This will not currently work properly for dynamically linked
+   executables or PIEs.  */
+#undef  LINK_SPEC
+#define LINK_SPEC \
+  "%{m64:-m pos390 -b elf64-s390} \
+   %{shared:-shared} \
+   %{!shared: \
+      %{static:-static} \
+      %{!static: \
+	%{rdynamic:-export-dynamic}}}"
+
+#define CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
+
+/* Define if long doubles should be mangled as 'g'.  */
+#define TARGET_ALTERNATE_LONG_DOUBLE_MANGLING
 
 /* DWARF is throwing a fit about F4SA... TODO */
 /*
@@ -120,7 +163,8 @@
 
 /* Preferred register allocation order.  */
 #define REG_ALLOC_ORDER							\
-  {  1, 2, 3, 4, 5, 0, 6, 7, 8, 9, 10, 11, 14, 15,			\
+  {  15, 0, 14,  /* Prefer the call-clobbered regs and r14.  */	\
+     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,				\
      16, 17, 18, 19, 20, 21, 22, 23,					\
      24, 25, 26, 27, 28, 29, 30, 31,					\
      38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 	\
