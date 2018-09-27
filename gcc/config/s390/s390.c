@@ -11474,19 +11474,57 @@ s390_outgoing_args_size (void)
 static void
 s390_asm_function_end_prologue (FILE *file)
 {
+  /* The offset to the next NAB should never be negative.  */
+  gcc_checking_assert (0 >= s390_outgoing_args_size () +
+			    get_frame_size () + STACK_POINTER_OFFSET);
+  unsigned HOST_WIDE_INT next_nab_offset =
+    s390_outgoing_args_size () + get_frame_size ()
+			       + STACK_POINTER_OFFSET;
+
+  /* Debug info  */
   if (ACCUMULATE_OUTGOING_ARGS)
     fprintf (file, "/* outgoing args size = %d */\n",
-             s390_outgoing_args_size());
+	     s390_outgoing_args_size ());
 
   fprintf (file, "/* frame size = " HOST_WIDE_INT_PRINT_DEC " */\n",
-           get_frame_size());
+	   get_frame_size ());
 
-  fprintf (file,
-	   "\tlghi\t%%r14," HOST_WIDE_INT_PRINT_DEC "\t/* set up NAB */\n",
-           s390_outgoing_args_size() + get_frame_size() + STACK_POINTER_OFFSET);
+  /* Materialize a 16-bit signed, 32-bit signed, 32-bit unsigned, or
+     64-bit unsigned value into r14 as necessary.  */
+  if (next_nab_offset <= 32767)
+    fprintf (file,
+	     "\tlghi\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED
+	     "\t/* set up NAB */\n", next_nab_offset);
+  else if (0 && next_nab_offset <= 2147483647)
+    /* z/OS TODO: this is disabled until we can figure out how to check
+       whether the target has the extended-immediate facility.  */
+    fprintf (file,
+	     "\tlgfi\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED
+	     "\t/* set up NAB */\n", next_nab_offset);
+  else
+    {
+      fprintf (file,
+	       "\tllill\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED
+	       "\t/* set up NAB */\n", next_nab_offset & 0xffff);
+      fprintf (file,
+	       "\toilh\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED "\n",
+	       (next_nab_offset >> 16) & 0xffff);
+      if (next_nab_offset > 4294967295)
+	{
+	  /* It's very unlikely that we will run into a stack frame
+	     this large unless something has gone wrong somewhere,
+	     but we still handle this case for pedantic correctness.  */
+	  fprintf (file,
+		   "\toihl\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED "\n",
+		   (next_nab_offset >> 32) & 0xffff);
+	  fprintf (file,
+		   "\toihh\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED "\n",
+		   (next_nab_offset >> 48) & 0xffff);
+	}
+    }
+  /* Store the new NAB.  */
   fprintf (file, "\talgr\t%%r14,%%r13\n");
   fprintf (file, "\tstg\t%%r14,%d(%%r13)\n", STACK_POINTER_OFFSET - 8);
-
 }
 #endif
 
