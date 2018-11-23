@@ -14302,10 +14302,10 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 
 #if TARGET_ZOS==1
   /* On z/OS Load R1 with the arg pointer */
-  rtx arg_reg = gen_rtx_REG (Pmode, 1);
-  emit_move_insn (arg_reg,
-		  gen_rtx_PLUS (Pmode, stack_pointer_rtx,
-				       GEN_INT (STACK_POINTER_OFFSET)));
+  /* TODO: I'm not sure why this save is necessary, but it works for now */
+  rtx arg_save = assign_stack_local (Pmode, GET_MODE_SIZE (Pmode), 0);
+  emit_move_insn (arg_save, arg_pointer_rtx);
+  emit_move_insn (arg_pointer_rtx, virtual_outgoing_args_rtx);
 
   /* Set up NAB pointer */
   rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
@@ -14390,7 +14390,8 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
     {
       *clobber_ret_reg = gen_rtx_CLOBBER (VOIDmode, retaddr_reg);
 #if TARGET_ZOS==1
-      rtx use_f4sa = gen_rtx_USE (VOIDmode, arg_reg);
+      /* TODO: this might need to go in the MD */
+      rtx use_f4sa = gen_rtx_USE (VOIDmode, arg_pointer_rtx);
       emit_insn (use_f4sa);
 #endif
 
@@ -14429,6 +14430,11 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
       gcc_assert (retaddr_reg != NULL_RTX);
       use_reg (&CALL_INSN_FUNCTION_USAGE (insn), gen_rtx_REG (Pmode, 12));
     }
+
+#if TARGET_ZOS==1
+  emit_move_insn (arg_pointer_rtx, arg_save);
+#endif
+
   return insn;
 }
 
