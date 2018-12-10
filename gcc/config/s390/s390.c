@@ -11475,7 +11475,7 @@ static void
 s390_asm_function_end_prologue (FILE *file)
 {
   /* The offset to the next NAB should never be negative.  */
-  gcc_checking_assert (0 >= s390_outgoing_args_size () +
+  gcc_checking_assert (0 <= s390_outgoing_args_size () +
 			    get_frame_size () + STACK_POINTER_OFFSET);
   unsigned HOST_WIDE_INT next_nab_offset =
     s390_outgoing_args_size () + get_frame_size ()
