@@ -16,6 +16,12 @@
     }					\
   while (0)
 
+/* Quick and dirty hack to prevent collect2 from using --eh-frame-hdr
+   for right now, because the linker can't recognize it.
+   TODO: Either implement --eh-frame-hdr correctly, or prevent
+   HAVE_LD_EH_FRAME_HDR from getting defined.  */
+#undef LINK_EH_SPEC
+
 #undef  ASM_SPEC
 #define ASM_SPEC				\
   "%{m31&m64}%{mesa&mzarch}%{march=z*}"	\
@@ -95,6 +101,11 @@
 
 #undef STACK_GROWS_DOWNWARD
 #define STACK_GROWS_DOWNWARD 0
+
+/* Our CFA is the value of r13 on entry to the function.  */
+#undef ARG_POINTER_CFA_OFFSET
+#undef FRAME_POINTER_CFA_OFFSET
+#define FRAME_POINTER_CFA_OFFSET(FNDECL) ((void) (FNDECL), 0)
 
 /* Set up fixed registers and calling convention:
 
