@@ -11568,7 +11568,13 @@ s390_emit_f4sa_prologue (void)
 
   rtx insn, addr;
 
-  // Store registers
+  /* Because the CIE is wrong, we need to correct the initial CFA value. I'd like to do this more cleanly eventually. TODO */
+  /*
+  insn = gen_rtx_USE (VOIDmode, hard_frame_pointer_rtx);
+  add_reg_note (insn, REG_CFA_ADJUST_CFA, hard_frame_pointer_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
+  emit_insn (insn);
+  */
 
   // Set registers as live
   df_set_regs_ever_live (11, 1);
@@ -11595,11 +11601,28 @@ s390_emit_f4sa_prologue (void)
           8 + ((first + 2) % 16) * 8);
 #endif
 
-        addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
+        addr = gen_rtx_MEM(Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8));
+        set_mem_alias_set (addr, get_frame_alias_set ());
         
-        insn = gen_store_multiple (gen_rtx_MEM (Pmode, addr),
+        insn = gen_store_multiple (addr,
 				   gen_rtx_REG (Pmode, first),
 				   GEN_INT ((last - first + 17) % 16));
+
+        rtx note = gen_store_multiple (addr,
+                                       gen_rtx_REG (Pmode, first),
+                                       GEN_INT ((last - first + 17) % 16));
+        note = PATTERN (note);
+
+        add_reg_note (insn, REG_FRAME_RELATED_EXPR, note);
+
+        for (int i = 0; i < XVECLEN (note, 0); i++)
+          if (GET_CODE (XVECEXP (note, 0, i)) == SET
+              && !global_not_special_regno_p (REGNO (SET_SRC (XVECEXP (note,
+                                                                       0, i)))))
+            RTX_FRAME_RELATED_P (XVECEXP (note, 0, i)) = 1;
+
+        RTX_FRAME_RELATED_P (insn) = 1;
+
 	emit_insn (insn);
       }
     }
@@ -11609,20 +11632,28 @@ s390_emit_f4sa_prologue (void)
   rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
   rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
   insn = gen_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
+  add_reg_note (insn, REG_CFA_DEF_CFA, temp_reg_rtx);
+  RTX_FRAME_RELATED_P (insn) = 1;
   emit_insn (insn);
 
-  insn = gen_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, next_ptr));
-  add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
+  rtx next_mem = gen_rtx_MEM (Pmode, next_ptr);
+  rtx prev_mem = gen_rtx_MEM (Pmode, prev_ptr);
+  set_mem_alias_set (next_mem, get_frame_alias_set ());
+  set_mem_alias_set (prev_mem, get_frame_alias_set ());
+
+  insn = gen_move_insn (hard_frame_pointer_rtx, next_mem);
   emit_insn (insn);
-  RTX_FRAME_RELATED_P (insn) = 1;
 
   insn = emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
 
-  insn = emit_move_insn (gen_rtx_MEM (Pmode, prev_ptr), temp_reg_rtx);
+  insn = emit_move_insn (prev_mem, temp_reg_rtx);
+  add_reg_note (insn, REG_CFA_DEF_CFA, prev_mem);
+  RTX_FRAME_RELATED_P (insn) = 1;
 
   // Initialize next block
   temp_reg_rtx = gen_rtx_REG (DImode, RETURN_REGNUM);
   rtx f4sa_addr = gen_rtx_MEM (SImode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
+  set_mem_alias_set (f4sa_addr, get_frame_alias_set ());
   MEM_VOLATILE_P (f4sa_addr) = 1;
   insn = emit_move_insn (temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0xC6F40000));
   insn = gen_iordi3 (temp_reg_rtx, temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0x0000E2C1));
@@ -12022,15 +12053,19 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
   // Reset to previous DSA
   rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-  insn = gen_move_insn (hard_frame_pointer_rtx, gen_rtx_MEM (Pmode, prev_ptr));
-  add_reg_note (insn, REG_CFA_RESTORE, hard_frame_pointer_rtx);
+  rtx prev_mem = gen_rtx_MEM (Pmode, prev_ptr);
+  set_mem_alias_set (prev_mem, get_frame_alias_set ());
+  insn = gen_move_insn (hard_frame_pointer_rtx, prev_mem);
+  add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
   RTX_FRAME_RELATED_P (insn) = 1;
   emit_insn (insn);
 
   // Restore return address
   return_reg = gen_rtx_REG (Pmode, RETURN_REGNUM);
   rtx return_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 8);
-  insn = gen_move_insn (return_reg, gen_rtx_MEM (Pmode, return_ptr));
+  rtx return_mem = gen_rtx_MEM (Pmode, return_ptr);
+  set_mem_alias_set (return_mem, get_frame_alias_set ());
+  insn = gen_move_insn (return_reg, return_mem);
   emit_insn (insn);
 
   // Restore registers
@@ -12060,11 +12095,22 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 #endif
 
 
-        addr = plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8);
+        addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8));
+        set_mem_alias_set (addr, get_frame_alias_set ());
         
         insn = gen_load_multiple (gen_rtx_REG (Pmode, first),
-				  gen_rtx_MEM (Pmode, addr),
+                                  addr,
 				  GEN_INT ((last - first + 17) % 16));
+
+        rtx cfa_restores = NULL_RTX;
+
+        for (int i = first; i != last + 1; i = (i + 1) % 16)
+          cfa_restores
+            = alloc_reg_note (REG_CFA_RESTORE,
+                gen_rtx_REG (Pmode, i), cfa_restores);
+
+        REG_NOTES (insn) = cfa_restores;
+        RTX_FRAME_RELATED_P (insn) = 1;
 	emit_insn (insn);
       }
     }
@@ -14515,8 +14561,8 @@ s390_optimize_prologue (void)
 {
   rtx_insn *insn, *new_insn, *next_insn;
 
-  // if (TARGET_ZOS_STACK_F4SA)
-    // return;
+  if (TARGET_ZOS_STACK_F4SA)
+    return;
 
   /* Do a final recompute of the frame-related data.  */
   s390_optimize_register_info ();

@@ -2986,6 +2986,7 @@ create_cie_data (void)
   dw_trace_info cie_trace;
 
   dw_stack_pointer_regnum = DWARF_FRAME_REGNUM (STACK_POINTER_REGNUM);
+  dw_frame_pointer_regnum = DWARF_FRAME_REGNUM (HARD_FRAME_POINTER_REGNUM);
 
   memset (&cie_trace, 0, sizeof (cie_trace));
   cur_trace = &cie_trace;
@@ -2995,6 +2996,11 @@ create_cie_data (void)
 
   /* On entry, the Canonical Frame Address is at SP.  */
   memset (&loc, 0, sizeof (loc));
+#if TARGET_ZOS==1
+  /* FIXME: I can't for the life of me figure this one out yet */
+  loc.reg = dw_frame_pointer_regnum;
+  loc.offset = 0;
+#else
   loc.reg = dw_stack_pointer_regnum;
   /* create_cie_data is called just once per TU, and when using .cfi_startproc
      is even done by the assembler rather than the compiler.  If the target
@@ -3002,6 +3008,7 @@ create_cie_data (void)
      function it is, use a single constant offset for the target and
      if needed, adjust before the first instruction in insn stream.  */
   loc.offset = DEFAULT_INCOMING_FRAME_SP_OFFSET;
+#endif
   def_cfa_1 (&loc);
 
   if (targetm.debug_unwind_info () == UI_DWARF2
