@@ -12066,6 +12066,8 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   rtx return_mem = gen_rtx_MEM (Pmode, return_ptr);
   set_mem_alias_set (return_mem, get_frame_alias_set ());
   insn = gen_move_insn (return_reg, return_mem);
+  add_reg_note (insn, REG_CFA_RESTORE, return_reg);
+  RTX_FRAME_RELATED_P (insn) = 1;
   emit_insn (insn);
 
   // Restore registers
