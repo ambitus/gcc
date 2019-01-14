@@ -4970,6 +4970,19 @@ legitimize_pic_address (rtx orig, rtx reg)
   return new_rtx;
 }
 
+/* Build the SYMBOL_REF for __zos_get_thread_pointer.  */
+
+static GTY(()) rtx s390_zos_get_tp;
+
+static rtx
+get_zos_get_tp (void)
+{
+  if (!s390_zos_get_tp)
+    s390_zos_get_tp = init_one_libfunc ("__zos_get_thread_pointer");
+
+  return s390_zos_get_tp;
+}
+
 /* Load the thread pointer into a register.  */
 
 rtx
@@ -4977,9 +4990,34 @@ s390_get_thread_pointer (void)
 {
   rtx tp = gen_reg_rtx (Pmode);
 
-  emit_move_insn (tp, gen_rtx_REG (Pmode, TP_REGNUM));
-  mark_reg_pointer (tp, BITS_PER_WORD);
+  if (!TARGET_ZOS)
+    emit_move_insn (tp, gen_rtx_REG (Pmode, TP_REGNUM));
+  else
+    {
+      /* For s390, we have no TP register. We need to emit a runtime call to
+	 the regular library function __zos_get_thread_pointer(), which is
+	 implemented in glibc.
 
+	 z/OS TODO: Get this to work for shared cases.
+
+	 z/OS TODO: While __zos_get_thread_pointer is by no means pure,
+	 from the perspective of any given thread, it acts like a pure
+	 function. Can we optimize this?
+
+         z/OS TODO: Is all of the following necessary?  */
+
+      rtx tp_value;
+
+      start_sequence ();
+      tp_value = emit_library_call_value (get_zos_get_tp (), NULL_RTX,
+					  LCT_NORMAL, Pmode);
+      rtx_insn *insns = get_insns ();
+      end_sequence ();
+
+      emit_libcall_block (insns, tp, tp_value, NULL_RTX);
+    }
+
+  mark_reg_pointer (tp, BITS_PER_WORD);
   return tp;
 }
 
