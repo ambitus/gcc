@@ -12735,6 +12735,33 @@ s390_function_arg_integer (machine_mode mode, const_tree type)
    all other structures (and complex numbers) are passed by
    reference.  */
 
+#if TARGET_ZOS==1
+static bool
+s390_pass_by_reference (cumulative_args_t ca ATTRIBUTE_UNUSED,
+			machine_mode mode, const_tree type,
+			bool named ATTRIBUTE_UNUSED)
+{
+  int size = s390_function_arg_size (mode, type);
+
+  if (size > 8)
+    return true;
+
+  if (type)
+    {
+      if (AGGREGATE_TYPE_P (type) && exact_log2 (size) < 0)
+        return true;
+
+      if (TREE_CODE (type) == COMPLEX_TYPE
+	  || TREE_CODE (type) == VECTOR_TYPE)
+	return true;
+
+      if (FLOAT_TYPE_P (type))
+        return true;
+    }
+
+  return false;
+}
+#else
 static bool
 s390_pass_by_reference (cumulative_args_t ca ATTRIBUTE_UNUSED,
 			machine_mode mode, const_tree type,
@@ -12760,6 +12787,7 @@ s390_pass_by_reference (cumulative_args_t ca ATTRIBUTE_UNUSED,
 
   return false;
 }
+#endif
 
 /* Update the data in CUM to advance over an argument of mode MODE and
    data type TYPE.  (TYPE is null for libcalls where that information
@@ -12903,6 +12931,29 @@ s390_function_arg_padding (machine_mode mode, const_tree type)
    in a memory buffer whose address is passed by the caller as
    hidden first argument.  */
 
+#if TARGET_ZOS==1
+static bool
+s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
+{
+  /* We accept small integral (and similar) types.  */
+  if (INTEGRAL_TYPE_P (type)
+      || POINTER_TYPE_P (type)
+      || TREE_CODE (type) == OFFSET_TYPE)
+    return int_size_in_bytes (type) > 8;
+
+  /* Aggregates and similar constructs are always returned
+     in memory.  */
+  if (AGGREGATE_TYPE_P (type)
+      || TREE_CODE (type) == COMPLEX_TYPE
+      || VECTOR_TYPE_P (type))
+    return true;
+
+  /* ??? We get called on all sorts of random stuff from
+     aggregate_value_p.  We can't abort, but it's not clear
+     what's safe to return.  Pretend it's a struct I guess.  */
+  return true;
+}
+#else
 static bool
 s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
 {
@@ -12931,6 +12982,7 @@ s390_return_in_memory (const_tree type, const_tree fundecl ATTRIBUTE_UNUSED)
      what's safe to return.  Pretend it's a struct I guess.  */
   return true;
 }
+#endif
 
 /* Function arguments and return values are promoted to word size.  */
 
