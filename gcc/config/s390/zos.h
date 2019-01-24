@@ -88,7 +88,6 @@
 #undef BASE_REGNUM
 #define BASE_REGNUM 9
 
-#undef STACK_POINTER_OFFSET
 #define STACK_POINTER_OFFSET 152
 
 #define DEFAULT_PCC_STRUCT_RETURN 1
@@ -96,12 +95,16 @@
 #undef FUNCTION_VALUE_REGNO_P
 #define FUNCTION_VALUE_REGNO_P(N) ((N) == 15)
 
-#undef  TARGET_ASM_FUNCTION_END_PROLOGUE
-#define TARGET_ASM_FUNCTION_END_PROLOGUE s390_asm_function_end_prologue
-
-#undef STACK_GROWS_DOWNWARD
 #define STACK_GROWS_DOWNWARD 0
 
+/* z/OS TODO: The current BIGGEST_ALIGN and STRICT_ALIGNMENT in s390.h
+   seem suspect in the face of the 16-byte atomic instructions, some of
+   which require 16-byte alignment or else emit a hardware exception. I
+   haven't seen the linux port generate incorrect atomic code yet, but at
+   some point we should go through and check the atomic codegen.  */
+
+/* z/OS TODO: Strictly, our CFA should be the value of 136(r13) on
+   entry, before prologue code has run.  */
 /* Our CFA is the value of r13 on entry to the function.  */
 #undef ARG_POINTER_CFA_OFFSET
 #undef FRAME_POINTER_CFA_OFFSET
@@ -124,6 +127,10 @@
 
    All non-FP vector registers are call-clobbered v16-v31.  */
 
+/* z/OS TODO: We should try allowing r1 to be used for other purposes.
+   Also we should DEFINITELY make r14 available, since it will usually
+   be saved anyway and should be available for the rest of the
+   function.  */
 #define FIXED_REGISTERS				\
 { 0, 1, 0, 0, 					\
   0, 0, 0, 0, 					\
@@ -156,6 +163,7 @@
   1, 1, 1, 1, 					\
   1, 1, 1, 1 }
 
+/* z/OS TODO: Should this not include r15 (and maybe r1?).  */
 #define CALL_REALLY_USED_REGISTERS		\
 { 1, 0, 0, 0, 	/* r0 - r15 */			\
   0, 0, 0, 0, 					\
@@ -181,6 +189,8 @@
      38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 	\
      15, 32, 33, 34, 35, 36, 37 }
 
+/* z/OS TODO: These the stack pointer rules seem suspect. Why do we need
+   them?  */
 #undef ELIMINABLE_REGS
 #define ELIMINABLE_REGS           \
 {{ FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM }, \

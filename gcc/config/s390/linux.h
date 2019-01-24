@@ -126,6 +126,13 @@ along with GCC; see the file COPYING3.  If not see
 #define FUNCTION_VALUE_REGNO_P(N)          \
     ((N) == 2 || (N) == 16 || (TARGET_VX && (N) == FIRST_VEC_ARG_REGNO))
 
+/* Our stack grows from higher to lower addresses.  However, local variables
+   are accessed by positive offsets, and function arguments are stored at
+   increasing addresses.  */
+#define STACK_GROWS_DOWNWARD 1
+
+/* Offset from stack-pointer to first location of outgoing args.  */
+#define STACK_POINTER_OFFSET (TARGET_64BIT ? 160 : 96)
 
 /* Set up fixed registers and calling convention:
 

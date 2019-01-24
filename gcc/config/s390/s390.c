@@ -462,6 +462,10 @@ const char *indirect_branch_table_name[INDIRECT_BRANCH_NUM_OPTIONS] =	\
   { ".s390_indirect_jump", ".s390_indirect_call",
     ".s390_return_reg", ".s390_return_mem" };
 
+/* For z/OS, the offset from the DSA start to the save slot for the
+   given GPR.  */
+#define F4SA_GPR_OFFSET(regno) (8 + (((regno) + 2) % 16) * 8)
+
 bool
 s390_return_addr_from_memory ()
 {
@@ -9728,7 +9732,6 @@ s390_back_chain_rtx (void)
   return chain;
 }
 
-#if TARGET_ZOS==0
 /* Find first call clobbered register unused in a function.
    This could be used as base register in a leaf function
    or for holding the return address before epilogue.  */
@@ -9742,7 +9745,6 @@ find_unused_clobbered_reg (void)
       return i;
   return 0;
 }
-#endif
 
 
 /* Helper function for s390_regs_ever_clobbered.  Sets the fields in DATA for all
@@ -9857,7 +9859,6 @@ s390_regs_ever_clobbered (char regs_ever_clobbered[])
     }
 }
 
-#if TARGET_ZOS==0
 /* Determine the frame area which actually has to be accessed
    in the function epilogue. The values are stored at the
    given pointers AREA_BOTTOM (address of the lowest used stack
@@ -9903,7 +9904,7 @@ s390_frame_area (int *area_bottom, int *area_top)
   *area_bottom = b;
   *area_top = t;
 }
-#endif
+
 /* Update gpr_save_slots in the frame layout trying to make use of
    FPRs as GPR save slots.
    This is a helper routine of s390_register_info.  */
@@ -9912,7 +9913,7 @@ static void
 s390_register_info_gprtofpr ()
 {
   int save_reg_slot = FPR0_REGNUM;
-  int i, j;
+  int i, j, first_csr, last_csr;
 
   if (!TARGET_Z10 || !TARGET_HARD_FLOAT || !crtl->is_leaf)
     return;
@@ -9923,7 +9924,12 @@ s390_register_info_gprtofpr ()
   if (crtl->calls_eh_return)
     return;
 
-  for (i = 15; i >= (TARGET_ZOS_STACK_F4SA ? 0 : 6); i--)
+  if (TARGET_ZOS)
+    first_csr = 1, last_csr = 14;
+  else
+    first_csr = 6, last_csr = 15;
+
+  for (i = last_csr; i >= first_csr; i--)
     {
       if (cfun_gpr_save_slot (i) == SAVE_SLOT_NONE)
 	continue;
@@ -9940,7 +9946,7 @@ s390_register_info_gprtofpr ()
 	  /* We only want to use ldgr/lgdr if we can get rid of
 	     stm/lm entirely.  So undo the gpr slot allocation in
 	     case we ran out of FPR save slots.  */
-	  for (j = (TARGET_ZOS_STACK_F4SA ? 0 : 6); j <= 15; j++)
+	  for (j = first_csr; j <= last_csr; j++)
 	    if (FP_REGNO_P (cfun_gpr_save_slot (j)))
 	      cfun_gpr_save_slot (j) = SAVE_SLOT_STACK;
 	  break;
@@ -9965,7 +9971,8 @@ s390_register_info_stdarg_fpr ()
   if (!cfun->stdarg
       || !TARGET_HARD_FLOAT
       || !cfun->va_list_fpr_size
-      || crtl->args.info.fprs >= FP_ARG_NUM_REG)
+      || crtl->args.info.fprs >= FP_ARG_NUM_REG
+      || TARGET_ZOS)
     return;
 
   min_fpr = crtl->args.info.fprs;
@@ -9994,7 +10001,8 @@ s390_register_info_stdarg_gpr ()
 
   if (!cfun->stdarg
       || !cfun->va_list_gpr_size
-      || crtl->args.info.gprs >= GP_ARG_NUM_REG)
+      || crtl->args.info.gprs >= GP_ARG_NUM_REG
+      || TARGET_ZOS)
     return;
 
   min_gpr = crtl->args.info.gprs;
@@ -10040,6 +10048,7 @@ static void
 s390_register_info_set_ranges ()
 {
   int i, j;
+  bool no_saves_cond;
 
   /* Find the first and the last save slot supposed to use the stack
      to set the restore range.
@@ -10047,13 +10056,59 @@ s390_register_info_set_ranges ()
      call-saved regs really need restoring (i.e. r6).  This code
      assumes that the vararg regs have not yet been recorded in
      cfun_gpr_save_slot.  */
-  for (i = 0; i < 16 && cfun_gpr_save_slot (i) != SAVE_SLOT_STACK; i++);
-  for (j = 15; j > i && cfun_gpr_save_slot (j) != SAVE_SLOT_STACK; j--);
-  cfun_frame_layout.first_restore_gpr = (i == 16) ? -1 : i;
-  cfun_frame_layout.last_restore_gpr = (i == 16) ? -1 : j;
-  cfun_frame_layout.first_save_gpr = (i == 16) ? -1 : i;
-  cfun_frame_layout.last_save_gpr = (i == 16) ? -1 : j;
+  if (TARGET_ZOS)
+    {
+      /* We cannot allow r13 to be arbitrarily clobbered.  */
+
+      for (i = 14; i != 13 && cfun_gpr_save_slot (i) != SAVE_SLOT_STACK;
+	   i = (i + 1) % 16);
+      for (j = 12; j != i && cfun_gpr_save_slot (i) != SAVE_SLOT_STACK;
+	   j = (j + 17) % 16);
+
+      no_saves_cond = i == 13;
+    }
+  else
+    {
+      for (i = 0; i < 16 && cfun_gpr_save_slot (i) != SAVE_SLOT_STACK; i++);
+      for (j = 15; j > i && cfun_gpr_save_slot (j) != SAVE_SLOT_STACK; j--);
+      no_saves_cond = i == 16;
+    }
+
+  cfun_frame_layout.first_restore_gpr = no_saves_cond ? -1 : i;
+  cfun_frame_layout.last_restore_gpr = no_saves_cond ? -1 : j;
+  cfun_frame_layout.first_save_gpr = no_saves_cond ? -1 : i;
+  cfun_frame_layout.last_save_gpr = no_saves_cond ? -1 : j;
 }
+
+
+/* Validate the set of gpr saves described by the passed in array, and
+   indicate the current function should save them. Helper for a couple
+   of functions below.  */
+
+static void
+set_gpr_save_slots_from_clobbers (char clobbered_regs[])
+{
+  int i, csr_low, csr_high;
+
+  memset (cfun_frame_layout.gpr_save_slots, SAVE_SLOT_NONE, 16);
+
+  if (TARGET_ZOS_STACK_F4SA)
+    {
+      /* Skip checking the caller-saved r0 and r15, and r13, which we
+	 handle in the prologue.  */
+      csr_low = 1, csr_high = 12;
+
+      if (clobbered_regs[14])
+	cfun_gpr_save_slot (14) = SAVE_SLOT_STACK;
+    }
+  else
+    csr_low = 6, csr_high = 15;
+
+  for (i = csr_low; i <= csr_high; i++)
+    if (clobbered_regs[i])
+      cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+}
+
 
 /* The GPR and FPR save slots in cfun->machine->frame_layout are set
    for registers which need to be saved in function prologue.
@@ -10096,20 +10151,6 @@ s390_register_info ()
 	  cfun_frame_layout.high_fprs++;
       }
 
-  /* Register 12 is used for GOT address, but also as temp in prologue
-     for split-stack stdarg functions (unless r14 is available).  */
-  clobbered_regs[12]
-    |= ((flag_pic && df_regs_ever_live_p (PIC_OFFSET_TABLE_REGNUM))
-	|| (flag_split_stack && cfun->stdarg
-	    && (crtl->is_leaf || TARGET_TPF_PROFILING
-		|| has_hard_reg_initial_val (Pmode, RETURN_REGNUM))));
-
-  clobbered_regs[BASE_REGNUM]
-    |= (cfun->machine->base_reg
-	&& REGNO (cfun->machine->base_reg) == BASE_REGNUM);
-
-  clobbered_regs[HARD_FRAME_POINTER_REGNUM]
-    |= !!frame_pointer_needed;
 
   /* On pre z900 machines this might take until machine dependent
      reorg to decide.
@@ -10123,29 +10164,35 @@ s390_register_info ()
 	|| cfun_frame_layout.save_return_addr_p
 	|| crtl->calls_eh_return);
 
-  clobbered_regs[STACK_POINTER_REGNUM]
-    |= (!crtl->is_leaf
-	|| TARGET_TPF_PROFILING
-	|| cfun_save_high_fprs_p
-	|| get_frame_size () > 0
-	|| (reload_completed && cfun_frame_layout.frame_size > 0)
-	|| cfun->calls_alloca);
-
-  memset (cfun_frame_layout.gpr_save_slots, SAVE_SLOT_NONE, 16);
-
-  if (TARGET_ZOS_STACK_F4SA)
+  /* This is all linux-specific.  */
+  if (!TARGET_ZOS)
     {
-      for (i = 0; i < 16; i++)
-        if (clobbered_regs[i])
-          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
-    }
-  else
-    {
-      for (i = 6; i < 16; i++)
-        if (clobbered_regs[i])
-          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
+      clobbered_regs[HARD_FRAME_POINTER_REGNUM]
+	|= !!frame_pointer_needed;
+
+      /* Register 12 is used for GOT address, but also as temp in prologue
+	 for split-stack stdarg functions (unless r14 is available).  */
+      clobbered_regs[12]
+	|= ((flag_pic && df_regs_ever_live_p (PIC_OFFSET_TABLE_REGNUM))
+	    || (flag_split_stack && cfun->stdarg
+		&& (crtl->is_leaf || TARGET_TPF_PROFILING
+		    || has_hard_reg_initial_val (Pmode, RETURN_REGNUM))));
+
+      clobbered_regs[BASE_REGNUM]
+	|= (cfun->machine->base_reg
+	    && REGNO (cfun->machine->base_reg) == BASE_REGNUM);
+
+      clobbered_regs[STACK_POINTER_REGNUM]
+	|= (!crtl->is_leaf
+	    || TARGET_TPF_PROFILING
+	    || cfun_save_high_fprs_p
+	    || get_frame_size () > 0
+	    || (reload_completed && cfun_frame_layout.frame_size > 0)
+	    || cfun->calls_alloca);
+
     }
 
+  set_gpr_save_slots_from_clobbers (clobbered_regs);
 
   s390_register_info_stdarg_fpr ();
   s390_register_info_gprtofpr ();
@@ -10188,26 +10235,14 @@ s390_optimize_register_info ()
 	|| cfun_frame_layout.save_return_addr_p
 	|| crtl->calls_eh_return);
 
-  memset (cfun_frame_layout.gpr_save_slots, SAVE_SLOT_NONE, 16);
-
-  if (TARGET_ZOS_STACK_F4SA)
-    {
-      for (i = 0; i < 16; i++)
-        if (clobbered_regs[i])
-          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
-    }
-  else
-    {
-      for (i = 6; i < 16; i++)
-        if (clobbered_regs[i])
-          cfun_gpr_save_slot (i) = SAVE_SLOT_STACK;
-    }
+  set_gpr_save_slots_from_clobbers (clobbered_regs);
 
   s390_register_info_set_ranges ();
   s390_register_info_stdarg_gpr ();
 }
 
 /* Fill cfun->machine with info about frame of current function.  */
+/* z/OS TODO: We should probably examine this.  */
 
 static void
 s390_frame_info (void)
@@ -10859,6 +10894,7 @@ s390_can_eliminate (const int from, const int to)
 }
 
 /* Return offset between register FROM and TO initially after prolog.  */
+/* z/OS TODO: This looks suspect.  */
 
 HOST_WIDE_INT
 s390_initial_elimination_offset (int from, int to)
@@ -10921,7 +10957,6 @@ s390_initial_elimination_offset (int from, int to)
   return offset;
 }
 
-#if TARGET_ZOS==0
 /* Emit insn to save fpr REGNUM at offset OFFSET relative
    to register BASE.  Return generated insn.  */
 
@@ -10951,7 +10986,6 @@ restore_fpr (rtx base, int offset, int regnum)
 
   return emit_move_insn (gen_rtx_REG (DFmode, regnum), addr);
 }
-#endif
 
 /* Return true if REGNO is a global register, but not one
    of the special ones that need to be saved/restored in anyway.  */
@@ -10959,13 +10993,21 @@ restore_fpr (rtx base, int offset, int regnum)
 static inline bool
 global_not_special_regno_p (int regno)
 {
-  return (global_regs[regno]
-	  /* These registers are special and need to be
-	     restored in any case.  */
-	  && !(regno == STACK_POINTER_REGNUM
-	       || regno == RETURN_REGNUM
-	       || regno == BASE_REGNUM
-	       || (flag_pic && regno == (int)PIC_OFFSET_TABLE_REGNUM)));
+  if (!TARGET_ZOS)
+    return (global_regs[regno]
+	    /* These registers are special and need to be
+	      restored in any case.  */
+	    && !(regno == STACK_POINTER_REGNUM
+		|| regno == RETURN_REGNUM
+		|| regno == BASE_REGNUM
+		|| (flag_pic && regno == (int)PIC_OFFSET_TABLE_REGNUM)));
+  else
+    /* z/OS TODO: Is this appropriate? Why does this need to be distinct
+       from the regular callee-saved reg list? Also, if we go with a PIC
+       reg, expand the special reg list.  */
+    return (global_regs[regno]
+	    && !(regno == 13
+		 || regno == RETURN_REGNUM));
 }
 
 /* Generate insn to save registers FIRST to LAST into
@@ -10999,9 +11041,9 @@ save_gprs (rtx base, int offset, int first, int last)
 
   insn = gen_store_multiple (addr,
 			     gen_rtx_REG (Pmode, first),
-			     GEN_INT (last - first + 1));
+			     GEN_INT ((last - first + 17) % 16));
 
-  if (first <= 6 && cfun->stdarg)
+  if (first <= 6 && cfun->stdarg && !TARGET_ZOS)
     for (i = 0; i < XVECLEN (PATTERN (insn), 0); i++)
       {
 	rtx mem = XEXP (XVECEXP (PATTERN (insn), 0, i), 0);
@@ -11022,7 +11064,7 @@ save_gprs (rtx base, int offset, int first, int last)
      set, even if it does not.  Therefore we emit a new pattern
      without those registers as REG_FRAME_RELATED_EXPR note.  */
 
-  if (first >= 6 && !global_not_special_regno_p (first))
+  if (!TARGET_ZOS && first >= 6 && !global_not_special_regno_p (first))
     {
       rtx pat = PATTERN (insn);
 
@@ -11034,16 +11076,21 @@ save_gprs (rtx base, int offset, int first, int last)
 
       RTX_FRAME_RELATED_P (insn) = 1;
     }
-  else if (last >= 6)
+  else if (TARGET_ZOS || last >= 6)
     {
       int start;
 
-      for (start = first >= 6 ? first : 6; start <= last; start++)
-	if (!global_not_special_regno_p (start))
-	  break;
+      if (!TARGET_ZOS)
+	{
+	  for (start = first >= 6 ? first : 6; start <= last; start++)
+	    if (!global_not_special_regno_p (start))
+	      break;
 
-      if (start > last)
-	return insn;
+	  if (start > last)
+	    return insn;
+	}
+      else
+	start = first;
 
       addr = plus_constant (Pmode, base,
 			    offset + (start - first) * UNITS_PER_LONG);
@@ -11066,7 +11113,7 @@ save_gprs (rtx base, int offset, int first, int last)
 
       note = gen_store_multiple (gen_rtx_MEM (Pmode, addr),
 				 gen_rtx_REG (Pmode, start),
-				 GEN_INT (last - start + 1));
+				 GEN_INT ((last - start + 17) % 16));
       note = PATTERN (note);
 
       add_reg_note (insn, REG_FRAME_RELATED_EXPR, note);
@@ -11110,7 +11157,7 @@ restore_gprs (rtx base, int offset, int first, int last)
 
   insn = gen_load_multiple (gen_rtx_REG (Pmode, first),
 			    addr,
-			    GEN_INT (last - first + 1));
+			    GEN_INT ((last - first + 17) % 16));
   RTX_FRAME_RELATED_P (insn) = 1;
   return insn;
 }
@@ -11160,7 +11207,6 @@ s390_load_got (void)
 /* This ties together stack memory (MEM with an alias set of frame_alias_set)
    and the change to the stack pointer.  */
 
-#if TARGET_ZOS==0
 static void
 s390_emit_stack_tie (void)
 {
@@ -11180,7 +11226,11 @@ s390_save_gprs_to_fprs (void)
   if (!TARGET_Z10 || !TARGET_HARD_FLOAT || !crtl->is_leaf)
     return;
 
-  for (i = 6; i < 16; i++)
+  /* z/OS TODO: prevent modification of r13 in inline asm with a
+     better error message, in a more appropriate place.  */
+  gcc_assert (!TARGET_ZOS || cfun_gpr_save_slot (13) == SAVE_SLOT_NONE);
+
+  for (i = TARGET_ZOS ? 1 : 6; i < (TARGET_ZOS ? 15 : 16); i++)
     {
       if (FP_REGNO_P (cfun_gpr_save_slot (i)))
 	{
@@ -11206,7 +11256,7 @@ s390_restore_gprs_from_fprs (void)
   if (!TARGET_Z10 || !TARGET_HARD_FLOAT || !crtl->is_leaf)
     return;
 
-  for (i = 6; i < 16; i++)
+  for (i = TARGET_ZOS ? 1 : 6; i < (TARGET_ZOS ? 15 : 16); i++)
     {
       rtx_insn *insn;
 
@@ -11215,21 +11265,20 @@ s390_restore_gprs_from_fprs (void)
 
       rtx fpr = gen_rtx_REG (DImode, cfun_gpr_save_slot (i));
 
-      if (i == STACK_POINTER_REGNUM)
+      if (!TARGET_ZOS && i == STACK_POINTER_REGNUM)
 	insn = emit_insn (gen_stack_restore_from_fpr (fpr));
       else
 	insn = emit_move_insn (gen_rtx_REG (DImode, i), fpr);
 
       df_set_regs_ever_live (i, true);
       add_reg_note (insn, REG_CFA_RESTORE, gen_rtx_REG (DImode, i));
-      if (i == STACK_POINTER_REGNUM)
+      if (!TARGET_ZOS && i == STACK_POINTER_REGNUM)
 	add_reg_note (insn, REG_CFA_DEF_CFA,
 		      plus_constant (Pmode, stack_pointer_rtx,
 				     STACK_POINTER_OFFSET));
       RTX_FRAME_RELATED_P (insn) = 1;
     }
 }
-#endif
 
 
 /* A pass run immediately before shrink-wrapping and prologue and epilogue
@@ -11497,7 +11546,6 @@ s390_allocate_stack (rtx op0, rtx op1)
 #endif
 }
 
-#if TARGET_ZOS==1
 /* Report accumulated outgoing arguments size.  */
 
 static inline int
@@ -11506,69 +11554,11 @@ s390_outgoing_args_size (void)
   return ACCUMULATE_OUTGOING_ARGS ? crtl->outgoing_args_size : 0;
 }
 
-/* Implement `TARGET_ASM_FUNCTION_END_PROLOGUE'.  */
-/* Output NAB initialization at end of function prologue.  */
-
-static void
-s390_asm_function_end_prologue (FILE *file)
-{
-  /* The offset to the next NAB should never be negative.  */
-  gcc_checking_assert (0 <= s390_outgoing_args_size () +
-			    get_frame_size () + STACK_POINTER_OFFSET);
-  unsigned HOST_WIDE_INT next_nab_offset =
-    s390_outgoing_args_size () + get_frame_size ()
-			       + STACK_POINTER_OFFSET;
-
-  /* Debug info  */
-  if (ACCUMULATE_OUTGOING_ARGS)
-    fprintf (file, "/* outgoing args size = %d */\n",
-	     s390_outgoing_args_size ());
-
-  fprintf (file, "/* frame size = " HOST_WIDE_INT_PRINT_DEC " */\n",
-	   get_frame_size ());
-
-  /* Materialize a 16-bit signed, 32-bit signed, 32-bit unsigned, or
-     64-bit unsigned value into r14 as necessary.  */
-  if (next_nab_offset <= 32767)
-    fprintf (file,
-	     "\tlghi\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED
-	     "\t/* set up NAB */\n", next_nab_offset);
-  else if (0 && next_nab_offset <= 2147483647)
-    /* z/OS TODO: this is disabled until we can figure out how to check
-       whether the target has the extended-immediate facility.  */
-    fprintf (file,
-	     "\tlgfi\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED
-	     "\t/* set up NAB */\n", next_nab_offset);
-  else
-    {
-      fprintf (file,
-	       "\tllill\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED
-	       "\t/* set up NAB */\n", next_nab_offset & 0xffff);
-      fprintf (file,
-	       "\toilh\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED "\n",
-	       (next_nab_offset >> 16) & 0xffff);
-      if (next_nab_offset > 4294967295)
-	{
-	  /* It's very unlikely that we will run into a stack frame
-	     this large unless something has gone wrong somewhere,
-	     but we still handle this case for pedantic correctness.  */
-	  fprintf (file,
-		   "\toihl\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED "\n",
-		   (next_nab_offset >> 32) & 0xffff);
-	  fprintf (file,
-		   "\toihh\t%%r14," HOST_WIDE_INT_PRINT_UNSIGNED "\n",
-		   (next_nab_offset >> 48) & 0xffff);
-	}
-    }
-  /* Store the new NAB.  */
-  fprintf (file, "\talgr\t%%r14,%%r13\n");
-  fprintf (file, "\tstg\t%%r14,%d(%%r13)\n", STACK_POINTER_OFFSET - 8);
-}
-#endif
-
 void
 s390_emit_f4sa_prologue (void)
 {
+  gcc_checking_assert (TARGET_CPU_ZARCH && TARGET_64BIT);
+
 #if 0 //def DEBUG_F4SA
   printf("\nCFUN prologue dump:\n"
     //"   gprs_offset: %d\n"
@@ -11604,7 +11594,8 @@ s390_emit_f4sa_prologue (void)
     );
 #endif
 
-  rtx insn, addr;
+  /* z/OS TODO: The CFA should be the NAB on entry to the function,
+     before the DSA swap.  */
 
   /* Because the CIE is wrong, we need to correct the initial CFA value. I'd like to do this more cleanly eventually. TODO */
   /*
@@ -11614,97 +11605,111 @@ s390_emit_f4sa_prologue (void)
   emit_insn (insn);
   */
 
-  // Set registers as live
-  df_set_regs_ever_live (11, 1);
-  df_set_regs_ever_live (12, 1);
-  df_set_regs_ever_live (13, 1);
-  df_set_regs_ever_live (14, 1);
+  /* Save GPRs.  */
 
-  if (cfun_frame_layout.first_save_gpr != -1)
+  int first = cfun_frame_layout.first_save_gpr;
+
+  /* At some point, the machinations of this file require the save slots
+     for leaf functions to be the fprs.  */
+  s390_save_gprs_to_fprs ();
+
+  if (first != -1)
+    emit_insn (save_gprs (hard_frame_pointer_rtx,
+			  F4SA_GPR_OFFSET (first), first,
+			  cfun_frame_layout.last_save_gpr));
+
+  /* Create a new DSA if necessary.
+     z/OS TODO: The 'if necessary' part might complicate CFI. Check if
+     gcc can figure out what to do.  */
+
+  if (!crtl->is_leaf || cfun->calls_alloca)
     {
-      int first, last;
-      for (first = 14; first != 13; first = (first + 1) % 16)
-          if (df_regs_ever_live_p (first))
-            break;
+      /* Only create a new DSA in non-leaf functions that don't use
+	 dynamic stack allocation.
 
-      if (first != 13) {
-        for (last = 12; last != 13; last = (last + 15) % 16)
-          if (df_regs_ever_live_p (last))
-            break;
+	 z/OS TODO: We could even take this a step further and change the
+	 dynamic stack alloc code to manipulate the caller-provided
+	 136(r13) as the stack pointer instead of the NAB (we're already
+	 assuming that callers can modify it, so might as well take
+	 advantage of that), allowing all leaf functions to avoid the
+	 prologue.
 
-#ifdef DEBUG_F4SA
-        printf("   Saving registers %d to %d at fp + %d\n",
-          first,
-          last,
-          8 + ((first + 2) % 16) * 8);
-#endif
+	 Going even further, we could postpone DSA creation for all
+	 functions that have at least one call-free codepath, moving it
+	 into a more derived branch in which doing so is likely to be
+	 profitable.  */
 
-        addr = gen_rtx_MEM(Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8));
-        set_mem_alias_set (addr, get_frame_alias_set ());
-        
-        insn = gen_store_multiple (addr,
-				   gen_rtx_REG (Pmode, first),
-				   GEN_INT ((last - first + 17) % 16));
+      /* We need to unconditionally keep track of the size of args we
+	 might provide.  */
+      gcc_checking_assert (ACCUMULATE_OUTGOING_ARGS);
 
-        rtx note = gen_store_multiple (addr,
-                                       gen_rtx_REG (Pmode, first),
-                                       GEN_INT ((last - first + 17) % 16));
-        note = PATTERN (note);
+      /* Swap DSAs:
+	 Load new DSA into r15, set up last DSA ptr, NAB, and f4sa sig,
+	 then set r13 to r15. We can use r15 with impunity here since r15
+	 is volatile and cannot be used before the prologue. r0 is the
+	 other register we could freely use, but it can't be used as a
+	 base reg, so isn't suitable. Any other reg would require at
+	 least one spill, even for leaves.  */
 
-        add_reg_note (insn, REG_FRAME_RELATED_EXPR, note);
+      HOST_WIDE_INT next_nab_offset;
+      rtx r15, r0, addr, insn, next_dsa_ptr;
 
-        for (int i = 0; i < XVECLEN (note, 0); i++)
-          if (GET_CODE (XVECEXP (note, 0, i)) == SET
-              && !global_not_special_regno_p (REGNO (SET_SRC (XVECEXP (note,
-                                                                       0, i)))))
-            RTX_FRAME_RELATED_P (XVECEXP (note, 0, i)) = 1;
+      /* r15 <- 136(r13)
+	 Also mark r15 as the new CFA reg.  */
+      r15 = gen_rtx_REG (Pmode, 15);
+      next_dsa_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
+      addr = gen_rtx_MEM (Pmode, next_dsa_ptr);
 
-        RTX_FRAME_RELATED_P (insn) = 1;
+      insn = emit_move_insn (r15, addr);
+      add_reg_note (insn, REG_CFA_DEF_CFA, addr);
+      RTX_FRAME_RELATED_P (insn) = 1;
 
-	emit_insn (insn);
-      }
+      /* 128(r15) <- r13  */
+      addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, r15, 128));
+      insn = emit_move_insn (addr, hard_frame_pointer_rtx);
+
+      /* r0 <- r15 + min size of stack area used by function  */
+      next_nab_offset = s390_outgoing_args_size () + get_frame_size ()
+			+ STACK_POINTER_OFFSET;
+      gcc_checking_assert (next_nab_offset >= 152);
+
+      r0 = gen_rtx_REG (Pmode, 0);
+      emit_move_insn (r0,
+		      plus_constant (Pmode, r15, next_nab_offset));
+
+      /* 144(r15) <- r0  */
+      /* z/OS TODO: emit stack probes/stack checking code. Use
+	 allocate_stack_space.  */
+      addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, r15, 144));
+      emit_move_insn (addr, r0);
+
+      /* 4(r15) <- 'F4SA' in EBCDIC.  */
+      if (TARGET_EXTIMM)
+	emit_move_insn (r0, GEN_INT (0xC6F4E2C1));
+      else
+	{
+	  insn = emit_move_insn (r0, GEN_INT (0xC6F40000));
+	  insn = gen_iordi3 (r0, r0, GEN_INT (0x0000E2C1));
+	  emit_insn (insn);
+	}
+      addr = gen_rtx_MEM (SImode, plus_constant (Pmode, r15, 4));
+      emit_move_insn (addr, gen_lowpart (SImode, r0));
+
+      /* r13 <- r15. Finish the swap.
+         z/OS TODO: Make sure that this always occurs after the DSA
+         setup has completed. Prevent scheduling later.  */
+      insn = emit_move_insn (hard_frame_pointer_rtx, r15);
+      add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
+      RTX_FRAME_RELATED_P (insn) = 1;
     }
 
-  // Chain next block
-  rtx temp_reg_rtx = gen_rtx_REG (Pmode, RETURN_REGNUM);
-  rtx next_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
-  rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-  insn = gen_move_insn (temp_reg_rtx, hard_frame_pointer_rtx);
-  add_reg_note (insn, REG_CFA_DEF_CFA, temp_reg_rtx);
-  RTX_FRAME_RELATED_P (insn) = 1;
-  emit_insn (insn);
+  /* z/OS TODO: Save FPRs and VRs here.  */
 
-  rtx next_mem = gen_rtx_MEM (Pmode, next_ptr);
-  rtx prev_mem = gen_rtx_MEM (Pmode, prev_ptr);
-  set_mem_alias_set (next_mem, get_frame_alias_set ());
-  set_mem_alias_set (prev_mem, get_frame_alias_set ());
-
-  insn = gen_move_insn (hard_frame_pointer_rtx, next_mem);
-  emit_insn (insn);
-
-  insn = emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
-
-  insn = emit_move_insn (prev_mem, temp_reg_rtx);
-  add_reg_note (insn, REG_CFA_DEF_CFA, prev_mem);
-  RTX_FRAME_RELATED_P (insn) = 1;
-
-  // Initialize next block
-  temp_reg_rtx = gen_rtx_REG (DImode, RETURN_REGNUM);
-  rtx f4sa_addr = gen_rtx_MEM (SImode, plus_constant (Pmode, hard_frame_pointer_rtx, 4));
-  set_mem_alias_set (f4sa_addr, get_frame_alias_set ());
-  MEM_VOLATILE_P (f4sa_addr) = 1;
-  insn = emit_move_insn (temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0xC6F40000));
-  insn = gen_iordi3 (temp_reg_rtx, temp_reg_rtx, gen_rtx_CONST_INT (VOIDmode, 0x0000E2C1));
-  emit_insn (insn);
-  insn = emit_move_insn (f4sa_addr, gen_lowpart(SImode, temp_reg_rtx));
-
-  /* TODO: what is this */
+  /* z/OS TODO: What does this do? */
   if (cfun->machine->base_reg)
     emit_insn (gen_main_pool (cfun->machine->base_reg));
 
   emit_insn (gen_blockage ());
-
-  return;
 }
 
 /* Expand the prologue into a bunch of separate insns.  */
@@ -11712,18 +11717,6 @@ s390_emit_f4sa_prologue (void)
 void
 s390_emit_prologue (void)
 {
-#if TARGET_ZOS==1
-
-  if (TARGET_ZOS_STACK_F4SA)
-    {
-      s390_emit_f4sa_prologue ();
-      return;
-    }
-
-  gcc_unreachable ();
-
-#else
-
   rtx insn, addr;
   rtx temp_reg;
   int i;
@@ -12040,15 +12033,10 @@ s390_emit_prologue (void)
 	 lies between the profiling mechanisms.  */
       emit_insn (gen_blockage ());
     }
-#endif
 }
 
 void s390_emit_f4sa_epilogue (bool sibcall)
 {
-  rtx addr, insn;
-  rtx return_reg;
-  rtvec p;
-
 #if 0 //def DEBUG_F4SA
   printf("CFUN epilogue dump:\n"
     //"   gprs_offset: %d\n"
@@ -12084,85 +12072,90 @@ void s390_emit_f4sa_epilogue (bool sibcall)
     );
 #endif
 
+  rtx addr, insn;
+  int first = cfun_frame_layout.first_restore_gpr;
+  int last = cfun_frame_layout.last_restore_gpr;
+
   if (sibcall)
     {
       sorry("Sibcalls are not implemented for F4SA\n");
     }
 
-  // Reset to previous DSA
-  rtx prev_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
-  rtx prev_mem = gen_rtx_MEM (Pmode, prev_ptr);
-  set_mem_alias_set (prev_mem, get_frame_alias_set ());
-  insn = gen_move_insn (hard_frame_pointer_rtx, prev_mem);
-  add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
-  RTX_FRAME_RELATED_P (insn) = 1;
-  emit_insn (insn);
+  /* z/OS TODO: Restore FPRs and VRs here.  */
 
-  // Restore return address
-  return_reg = gen_rtx_REG (Pmode, RETURN_REGNUM);
-  rtx return_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 8);
-  rtx return_mem = gen_rtx_MEM (Pmode, return_ptr);
-  set_mem_alias_set (return_mem, get_frame_alias_set ());
-  insn = gen_move_insn (return_reg, return_mem);
-  add_reg_note (insn, REG_CFA_RESTORE, return_reg);
-  RTX_FRAME_RELATED_P (insn) = 1;
-  emit_insn (insn);
+  /* Swap to previous DSA if necessary.  */
 
-  // Restore registers
-
-  // Set registers as live
-  df_set_regs_ever_live (11, 1);
-  df_set_regs_ever_live (12, 1);
-  df_set_regs_ever_live (13, 1);
-
-  if (cfun_frame_layout.first_save_gpr != -1)
+  if (!crtl->is_leaf || cfun->calls_alloca)
     {
-      int first, last;
-      for (first = 0; first != 13; first = (first + 1) % 16)
-          if (df_regs_ever_live_p (first))
-            break;
+      /* r13 <- 128(r13)  */
+      addr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
+      addr = gen_rtx_MEM (Pmode, addr);
+      insn = emit_move_insn (hard_frame_pointer_rtx, addr);
 
-      if (first != 13) {
-        for (last = 12; last != 13; last = (last + 15) % 16)
-          if (df_regs_ever_live_p (last))
-            break;
-
-#ifdef DEBUG_F4SA
-        printf("   Reload registers %d to %d at fp + %d\n",
-          first,
-          last,
-          8 + ((first + 2) % 16) * 8);
-#endif
-
-
-        addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, hard_frame_pointer_rtx, 8 + ((first + 2) % 16) * 8));
-        set_mem_alias_set (addr, get_frame_alias_set ());
-        
-        insn = gen_load_multiple (gen_rtx_REG (Pmode, first),
-                                  addr,
-				  GEN_INT ((last - first + 17) % 16));
-
-        rtx cfa_restores = NULL_RTX;
-
-        for (int i = first; i != last + 1; i = (i + 1) % 16)
-          cfa_restores
-            = alloc_reg_note (REG_CFA_RESTORE,
-                gen_rtx_REG (Pmode, i), cfa_restores);
-
-        REG_NOTES (insn) = cfa_restores;
-        RTX_FRAME_RELATED_P (insn) = 1;
-	emit_insn (insn);
-      }
+      add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
+      RTX_FRAME_RELATED_P (insn) = 1;
     }
 
-  // Jump
-  p = rtvec_alloc (2);
+  if (first != -1)
+    {
+      /* Restore GPRs.  */
+      int i;
+      rtx cfa_restores = NULL_RTX;
 
-  RTVEC_ELT (p, 0) = ret_rtx;
-  RTVEC_ELT (p, 1) = gen_rtx_USE (VOIDmode, return_reg);
-  emit_jump_insn (gen_rtx_PARALLEL (VOIDmode, p));
+      gcc_checking_assert (last != -1);
+      gcc_checking_assert (first != 0 && first != 15
+			   && last != 0 && last != 15);
 
-  return;
+      if (first == RETURN_REGNUM)
+	{
+	  /* Generate a restore for r14. We can't just generate an lmg
+	     starting at r14, because that would clobber r15, our return
+	     value.  */
+	  addr = plus_constant (Pmode, hard_frame_pointer_rtx,
+				F4SA_GPR_OFFSET (RETURN_REGNUM));
+	  addr = gen_rtx_MEM (Pmode, addr);
+	  emit_move_insn (gen_rtx_REG (Pmode, RETURN_REGNUM), addr);
+	  /* Find next reg which should be restored.  */
+	  for (first = 1;
+	       first < last && cfun_gpr_save_slot (first) != SAVE_SLOT_STACK;
+	       first++);
+	}
+      else if (last == RETURN_REGNUM)
+	/* The case where first != 14 and last == 14 should never
+	   happen.  */
+	gcc_unreachable ();
+
+      if (last != RETURN_REGNUM)
+	{
+	  /* Generate restores restores for the rest of the regs.  */
+	  for (i = first; i <= last; i++)
+	    {
+	      if (global_not_special_regno_p (i))
+		{
+		  addr = plus_constant (Pmode, hard_frame_pointer_rtx,
+					F4SA_GPR_OFFSET (i));
+		  addr = gen_rtx_MEM (Pmode, addr);
+		  set_mem_alias_set (addr, get_frame_alias_set ());
+		  emit_move_insn (addr, gen_rtx_REG (Pmode, i));
+		}
+	      else
+		cfa_restores = alloc_reg_note (REG_CFA_RESTORE,
+					       gen_rtx_REG (Pmode, i),
+					       cfa_restores);
+	    }
+
+	  /* Generate the actual lg/lmg.  */
+	  insn = emit_insn (restore_gprs (hard_frame_pointer_rtx,
+					  F4SA_GPR_OFFSET (first), first,
+					  last));
+	  REG_NOTES (insn) = cfa_restores;
+	}
+    }
+
+  s390_restore_gprs_from_fprs ();
+
+  /* Jump.  */
+  emit_jump_insn (gen_return_use (gen_rtx_REG (Pmode, RETURN_REGNUM)));
 }
 
 /* Expand the epilogue into a bunch of separate insns.  */
@@ -12170,17 +12163,6 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 void
 s390_emit_epilogue (bool sibcall)
 {
-#if TARGET_ZOS==1
-
-  if (TARGET_ZOS_STACK_F4SA)
-    {
-      s390_emit_f4sa_epilogue (sibcall);
-      return;
-    }
-  gcc_unreachable ();
-
-#else
-
   rtx frame_pointer, return_reg, cfa_restores = NULL_RTX;
   int area_bottom, area_top, offset = 0;
   int next_offset;
@@ -12385,7 +12367,6 @@ s390_emit_epilogue (bool sibcall)
 
   if (! sibcall)
     emit_jump_insn (gen_return_use (return_reg));
-#endif
 }
 
 /* Implement TARGET_SET_UP_BY_PROLOGUE.  */
@@ -12409,6 +12390,7 @@ static GTY(()) rtx morestack_ref;
 
 #define SPLIT_STACK_AVAILABLE 1024
 
+/* z/OS TODO: Split-stack stuff.  */
 /* Emit -fsplit-stack prologue, which goes before the regular function
    prologue.  */
 

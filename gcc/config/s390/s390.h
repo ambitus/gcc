@@ -289,7 +289,7 @@ extern const char *s390_host_detect_local_cpu (int argc, const char **argv);
   /* In libgcc, UNITS_PER_WORD has ABI-relevant effects, e.g. whether
      the library should export TImode functions or not.  Thus, we have
      to redefine UNITS_PER_WORD depending on __s390x__ for libgcc.  */
-  #ifdef __s390x__
+  #if defined (__s390x__) || defined (__ZOS__)
     #define UNITS_PER_WORD 8
   #else
     #define UNITS_PER_WORD 4
@@ -502,10 +502,7 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
 
 /* Stack layout and calling conventions.  */
 
-/* Our stack grows from higher to lower addresses.  However, local variables
-   are accessed by positive offsets, and function arguments are stored at
-   increasing addresses.  */
-#define STACK_GROWS_DOWNWARD 1
+/* Stack direction is OS-specific.  */
 #define FRAME_GROWS_DOWNWARD 1
 /* #undef ARGS_GROW_DOWNWARD */
 
@@ -514,8 +511,7 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
    is the location to place outgoing arguments.  Above those follow
    dynamic allocations (alloca), and finally the local variables.  */
 
-/* Offset from stack-pointer to first location of outgoing args.  */
-#define STACK_POINTER_OFFSET (TARGET_64BIT ? 160 : 96)
+/* STACK_POINTER_OFFSET is OS-dependent.  */
 
 /* Offset from the stack pointer register to an item dynamically
    allocated on the stack, e.g., by `alloca'.  */
