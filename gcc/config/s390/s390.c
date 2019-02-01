@@ -10876,12 +10876,10 @@ s390_can_eliminate (const int from, const int to)
   gcc_assert (to == STACK_POINTER_REGNUM
 	      || to == HARD_FRAME_POINTER_REGNUM);
 
-#if TARGET_ZOS==1
-#else
-  gcc_assert (from == FRAME_POINTER_REGNUM
-	      || from == ARG_POINTER_REGNUM
-	      || from == RETURN_ADDRESS_POINTER_REGNUM);
-#endif
+  if (!TARGET_ZOS)
+    gcc_assert (from == FRAME_POINTER_REGNUM
+		|| from == ARG_POINTER_REGNUM
+		|| from == RETURN_ADDRESS_POINTER_REGNUM);
 
   /* Make sure we actually saved the return address.  */
   if (from == RETURN_ADDRESS_POINTER_REGNUM)
@@ -13027,39 +13025,6 @@ s390_promote_function_mode (const_tree type, machine_mode mode,
    If RET_TYPE is null, define where to return a (scalar)
    value of mode MODE from a libcall.  */
 
-#if TARGET_ZOS==1
-static rtx
-s390_function_and_libcall_value (machine_mode mode,
-				 const_tree ret_type,
-				 const_tree fntype_or_decl,
-				 bool outgoing ATTRIBUTE_UNUSED)
-{
-  /* For vector return types it is important to use the RET_TYPE
-     argument whenever available since the middle-end might have
-     changed the mode to a scalar mode.  */
-  bool vector_ret_type_p = ((ret_type && VECTOR_TYPE_P (ret_type))
-			    || (!ret_type && VECTOR_MODE_P (mode)));
-
-  /* For normal functions perform the promotion as
-     promote_function_mode would do.  */
-  if (ret_type)
-    {
-      int unsignedp = TYPE_UNSIGNED (ret_type);
-      mode = promote_function_mode (ret_type, mode, &unsignedp,
-				    fntype_or_decl, 1);
-    }
-
-  gcc_assert (GET_MODE_CLASS (mode) == MODE_INT
-	      || SCALAR_FLOAT_MODE_P (mode)
-	      || (TARGET_VX_ABI && vector_ret_type_p));
-  gcc_assert (GET_MODE_SIZE (mode) <= (TARGET_VX_ABI ? 16 : 8));
-
-  if (TARGET_ZOS_STACK_F4SA)
-    return gen_rtx_REG (mode, 15);
-
-  gcc_unreachable ();
-}
-#else
 static rtx
 s390_function_and_libcall_value (machine_mode mode,
 				 const_tree ret_type,
@@ -13087,38 +13052,32 @@ s390_function_and_libcall_value (machine_mode mode,
   gcc_assert (GET_MODE_SIZE (mode) <= (TARGET_VX_ABI ? 16 : 8));
 
   if (TARGET_ZOS)
-    {
-      /* TODO ... */
-      return gen_rtx_REG (mode, 15);
-    }
-  else
-    {
-      if (TARGET_VX_ABI && vector_ret_type_p)
-	return gen_rtx_REG (mode, FIRST_VEC_ARG_REGNO);
-      else if (TARGET_HARD_FLOAT && SCALAR_FLOAT_MODE_P (mode))
-	return gen_rtx_REG (mode, 16);
-      else if (GET_MODE_SIZE (mode) <= UNITS_PER_LONG
-	       || UNITS_PER_LONG == UNITS_PER_WORD)
-	return gen_rtx_REG (mode, 2);
-      else if (GET_MODE_SIZE (mode) == 2 * UNITS_PER_LONG)
-	{
-	  /* This case is triggered when returning a 64 bit value with
-	     -m31 -mzarch.  Although the value would fit into a single
-	     register it has to be forced into a 32 bit register pair in
-	     order to match the ABI.  */
-	  rtvec p = rtvec_alloc (2);
+    return gen_rtx_REG (mode, 15);
 
-	  RTVEC_ELT (p, 0)
-	    = gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 2), const0_rtx);
-	  RTVEC_ELT (p, 1)
-	    = gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 3), GEN_INT (4));
+  if (TARGET_VX_ABI && vector_ret_type_p)
+    return gen_rtx_REG (mode, FIRST_VEC_ARG_REGNO);
+  else if (TARGET_HARD_FLOAT && SCALAR_FLOAT_MODE_P (mode))
+    return gen_rtx_REG (mode, 16);
+  else if (GET_MODE_SIZE (mode) <= UNITS_PER_LONG
+	   || UNITS_PER_LONG == UNITS_PER_WORD)
+    return gen_rtx_REG (mode, 2);
+  else if (GET_MODE_SIZE (mode) == 2 * UNITS_PER_LONG)
+    {
+      /* This case is triggered when returning a 64 bit value with
+	 -m31 -mzarch.  Although the value would fit into a single
+	 register it has to be forced into a 32 bit register pair in
+	 order to match the ABI.  */
+      rtvec p = rtvec_alloc (2);
 
-	  return gen_rtx_PARALLEL (mode, p);
-      }
+      RTVEC_ELT (p, 0)
+	= gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 2), const0_rtx);
+      RTVEC_ELT (p, 1)
+	= gen_rtx_EXPR_LIST (SImode, gen_rtx_REG (SImode, 3), GEN_INT (4));
+
+      return gen_rtx_PARALLEL (mode, p);
     }
   gcc_unreachable ();
 }
-#endif
 
 /* Define where to return a scalar return value of type RET_TYPE.  */
 
@@ -14359,9 +14318,10 @@ s390_call_saved_register_used (tree call_expr)
 static bool
 s390_function_ok_for_sibcall (tree decl, tree exp)
 {
-#if TARGET_ZOS == 1
-  return false;
-#endif
+  /* Sibcalls arent supported for z/OS yet.  */
+  if (TARGET_ZOS)
+    return false;
+
   /* The TPF epilogue uses register 1.  */
   if (TARGET_TPF_PROFILING)
     return false;
@@ -14412,6 +14372,7 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 {
   bool plt_call = false;
   rtx_insn *insn;
+  rtx arg_save;
   rtx vec[4] = { NULL_RTX };
   int elts = 0;
   rtx *call = &vec[0];
@@ -14420,19 +14381,20 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
   rtx *clobber_thunk_reg = &vec[3];
   int i;
 
-#if TARGET_ZOS==1
-  /* On z/OS Load R1 with the arg pointer */
-  /* TODO: I'm not sure why this save is necessary, but it works for now */
-  rtx arg_save = assign_stack_local (Pmode, GET_MODE_SIZE (Pmode), 0);
-  emit_move_insn (arg_save, arg_pointer_rtx);
-  emit_move_insn (arg_pointer_rtx, virtual_outgoing_args_rtx);
+  if (TARGET_ZOS)
+    {
+      /* On z/OS Load R1 with the arg pointer */
+      /* TODO: I'm not sure why this save is necessary, but it works for now */
+      arg_save = assign_stack_local (Pmode, GET_MODE_SIZE (Pmode), 0);
+      emit_move_insn (arg_save, arg_pointer_rtx);
+      emit_move_insn (arg_pointer_rtx, virtual_outgoing_args_rtx);
 
-  /* Set up NAB pointer */
-  rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
-  rtx src = gen_rtx_MEM (BLKmode, plus_constant (Pmode, reg, 144));
-  rtx dst = gen_rtx_MEM (BLKmode, plus_constant (Pmode, reg, 136));
-  emit_insn (gen_movmem_short (dst, src, GEN_INT (7)));
-#endif
+      /* Set up NAB pointer */
+      rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
+      rtx src = gen_rtx_MEM (BLKmode, plus_constant (Pmode, reg, 144));
+      rtx dst = gen_rtx_MEM (BLKmode, plus_constant (Pmode, reg, 136));
+      emit_insn (gen_movmem_short (dst, src, GEN_INT (7)));
+    }
 
   /* Direct function calls need special treatment.  */
   if (GET_CODE (addr_location) == SYMBOL_REF)
@@ -14509,11 +14471,10 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
   if (retaddr_reg != NULL_RTX)
     {
       *clobber_ret_reg = gen_rtx_CLOBBER (VOIDmode, retaddr_reg);
-#if TARGET_ZOS==1
-      /* TODO: this might need to go in the MD */
-      rtx use_f4sa = gen_rtx_USE (VOIDmode, arg_pointer_rtx);
-      emit_insn (use_f4sa);
-#endif
+
+      if (TARGET_ZOS)
+	/* z/OS TODO: this might need to go in the MD */
+	emit_use (arg_pointer_rtx);
 
       if (tls_call != NULL_RTX)
 	*use = gen_rtx_USE (VOIDmode, tls_call);
@@ -14551,9 +14512,8 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
       use_reg (&CALL_INSN_FUNCTION_USAGE (insn), gen_rtx_REG (Pmode, 12));
     }
 
-#if TARGET_ZOS==1
-  emit_move_insn (arg_pointer_rtx, arg_save);
-#endif
+  if (TARGET_ZOS)
+    emit_move_insn (arg_pointer_rtx, arg_save);
 
   return insn;
 }
