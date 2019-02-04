@@ -14467,6 +14467,12 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 
   if (result_reg != NULL_RTX)
     *call = gen_rtx_SET (result_reg, *call);
+  else if (TARGET_ZOS)
+    /* z/OS TODO: For some reason, gcc refuses to treat r15 as
+       call-clobbered for void functions unless we explicitly clobber
+       with this hack. At some point, we should figure out what's going
+       wrong, and fix it correctly, then remove this.  */
+    emit_clobber (gen_rtx_REG (Pmode, 15));
 
   if (retaddr_reg != NULL_RTX)
     {
