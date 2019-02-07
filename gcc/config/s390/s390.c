@@ -11605,10 +11605,10 @@ s390_emit_f4sa_prologue (void)
 
   /* Save GPRs.  */
 
+  HOST_WIDE_INT frame_size;
   int first = cfun_frame_layout.first_save_gpr;
 
-  /* At some point, the machinations of this file require the save slots
-     for leaf functions to be the fprs.  */
+  /* Save gprs to fprs when possible.  */
   s390_save_gprs_to_fprs ();
 
   if (first != -1)
@@ -11620,10 +11620,11 @@ s390_emit_f4sa_prologue (void)
      z/OS TODO: The 'if necessary' part might complicate CFI. Check if
      gcc can figure out what to do.  */
 
-  if (!crtl->is_leaf || cfun->calls_alloca)
+  frame_size = get_frame_size ();
+  if (!crtl->is_leaf || frame_size > 0 || cfun->calls_alloca)
     {
       /* Only create a new DSA in non-leaf functions that don't use
-	 dynamic stack allocation.
+	 the stack.
 
 	 z/OS TODO: We could even take this a step further and change the
 	 dynamic stack alloc code to manipulate the caller-provided
@@ -11637,16 +11638,12 @@ s390_emit_f4sa_prologue (void)
 	 into a more derived branch in which doing so is likely to be
 	 profitable.  */
 
-      /* We need to unconditionally keep track of the size of args we
-	 might provide.  */
-      gcc_checking_assert (ACCUMULATE_OUTGOING_ARGS);
-
       /* Swap DSAs:
 	 Load new DSA into r15, set up last DSA ptr, NAB, and f4sa sig,
 	 then set r13 to r15. We can use r15 with impunity here since r15
-	 is volatile and cannot be used before the prologue. r0 is the
-	 other register we could freely use, but it can't be used as a
-	 base reg, so isn't suitable. Any other reg would require at
+	 is call-clobbered and cannot be used before the prologue. r0 is
+	 the other register we could freely use, but it can't be used as
+	 a base reg, so isn't suitable. Any other reg would require at
 	 least one spill, even for leaves.  */
 
       HOST_WIDE_INT next_nab_offset;
@@ -11667,7 +11664,7 @@ s390_emit_f4sa_prologue (void)
       insn = emit_move_insn (addr, hard_frame_pointer_rtx);
 
       /* r0 <- r15 + min size of stack area used by function  */
-      next_nab_offset = s390_outgoing_args_size () + get_frame_size ()
+      next_nab_offset = s390_outgoing_args_size () + frame_size
 			+ STACK_POINTER_OFFSET;
       gcc_checking_assert (next_nab_offset >= 152);
 
@@ -12083,7 +12080,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
   /* Swap to previous DSA if necessary.  */
 
-  if (!crtl->is_leaf || cfun->calls_alloca)
+  if (!crtl->is_leaf || get_frame_size () > 0 || cfun->calls_alloca)
     {
       /* r13 <- 128(r13)  */
       addr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
