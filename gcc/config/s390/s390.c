@@ -10164,6 +10164,10 @@ s390_register_info ()
 	|| cfun_frame_layout.save_return_addr_p
 	|| crtl->calls_eh_return);
 
+  clobbered_regs[BASE_REGNUM]
+    |= (cfun->machine->base_reg
+	&& REGNO (cfun->machine->base_reg) == BASE_REGNUM);
+
   /* This is all linux-specific.  */
   if (!TARGET_ZOS)
     {
@@ -10177,10 +10181,6 @@ s390_register_info ()
 	    || (flag_split_stack && cfun->stdarg
 		&& (crtl->is_leaf || TARGET_TPF_PROFILING
 		    || has_hard_reg_initial_val (Pmode, RETURN_REGNUM))));
-
-      clobbered_regs[BASE_REGNUM]
-	|= (cfun->machine->base_reg
-	    && REGNO (cfun->machine->base_reg) == BASE_REGNUM);
 
       clobbered_regs[STACK_POINTER_REGNUM]
 	|= (!crtl->is_leaf
