@@ -466,6 +466,9 @@ const char *indirect_branch_table_name[INDIRECT_BRANCH_NUM_OPTIONS] =	\
    given GPR.  */
 #define F4SA_GPR_OFFSET(regno) (8 + (((regno) + 2) % 16) * 8)
 
+/* Check if x is a symbol ref for a weak symbol.  */
+#define WEAK_REF_P(x) (SYMBOL_REF_P (x) && SYMBOL_REF_WEAK (x))
+
 bool
 s390_return_addr_from_memory ()
 {
@@ -3953,9 +3956,13 @@ s390_cannot_force_const_mem (machine_mode mode, rtx x)
       return flag_pic != 0;
 
     case SYMBOL_REF:
+      /* On z/OS, we put weak non-PIC symbol refs in the constant pool
+	 to get around a limitation of the executable format.  */
+      if (TARGET_ZOS && SYMBOL_REF_WEAK (x))
+	return (flag_pic && !SYMBOL_REF_LOCAL_P (x));
       /* 'Naked' TLS symbol references are never OK,
          non-TLS symbols are OK iff we are non-PIC.  */
-      if (tls_symbolic_operand (x))
+      else if (tls_symbolic_operand (x))
 	return true;
       else
 	return flag_pic != 0;
@@ -4672,6 +4679,13 @@ s390_rel_address_ok_p (rtx symbol_ref)
   if (symbol_ref == s390_got_symbol () || CONSTANT_POOL_ADDRESS_P (symbol_ref))
     return true;
 
+  /* On z/OS, we cannot allow weak refs to appear as relative addresses.
+     Since we have no fixed load address, we can't correctly relocate the
+     relative forms of weak symbols to zero when the weak symbol remains
+     undefined at link time.   */
+  if (TARGET_ZOS && SYMBOL_REF_WEAK (symbol_ref))
+    return false;
+
   decl = SYMBOL_REF_DECL (symbol_ref);
 
   if (!flag_pic || SYMBOL_REF_LOCAL_P (symbol_ref))
@@ -5247,6 +5261,38 @@ legitimize_tls_address (rtx addr, rtx reg)
   return new_rtx;
 }
 
+/* Generate code that references SYMBOL_REF in a valid manner. Only
+   meaningful for z/OS, where we cannot allow weak symbols to produce
+   relative relocations.  */
+
+static rtx
+legitimize_weak_ref (rtx symbol_ref)
+{
+  rtx new_rtx;
+
+  gcc_assert (TARGET_ZOS && WEAK_REF_P (symbol_ref));
+
+  /* Let legitimize_tls_address handle TLS symbols as it wants to before
+     we do anything else, because we can't do it after.  */
+  if (TLS_SYMBOLIC_CONST (symbol_ref))
+    new_rtx = legitimize_tls_address (symbol_ref, NULL_RTX);
+  /* Non-local PIC refs should be handled as normal.  */
+  else if (flag_pic && !SYMBOL_REF_LOCAL_P (symbol_ref))
+    return legitimize_pic_address (symbol_ref, NULL_RTX);
+  else
+    new_rtx = symbol_ref;
+
+  /* legitimize_tls_address might have handled things for us.  */
+  if (!WEAK_REF_P (new_rtx))
+    return new_rtx;
+
+  /* Force the weak address into the constant pool.  */
+  new_rtx = gen_rtx_CONST (Pmode, new_rtx);
+  new_rtx = force_const_mem (Pmode, new_rtx);
+
+  return new_rtx;
+}
+
 /* Emit insns making the address in operands[1] valid for a standard
    move to operands[0].  operands[1] is replaced by an address which
    should be used instead of the former RTX to emit the move
@@ -5261,6 +5307,8 @@ emit_symbolic_move (rtx *operands)
     operands[1] = force_reg (Pmode, operands[1]);
   else if (TLS_SYMBOLIC_CONST (operands[1]))
     operands[1] = legitimize_tls_address (operands[1], temp);
+  else if (TARGET_ZOS && WEAK_REF_P (operands[1]))
+    operands[1] = legitimize_weak_ref (operands[1]);
   else if (flag_pic)
     operands[1] = legitimize_pic_address (operands[1], temp);
 }
@@ -5282,12 +5330,17 @@ s390_legitimize_address (rtx x, rtx oldx ATTRIBUTE_UNUSED,
 {
   rtx constant_term = const0_rtx;
 
+
   if (TLS_SYMBOLIC_CONST (x))
     {
       x = legitimize_tls_address (x, 0);
 
       if (s390_legitimate_address_p (mode, x, FALSE))
 	return x;
+    }
+  else if (TARGET_ZOS && WEAK_REF_P (x))
+    {
+      x = legitimize_weak_ref (x);
     }
   else if (GET_CODE (x) == PLUS
 	   && (TLS_SYMBOLIC_CONST (XEXP (x, 0))
