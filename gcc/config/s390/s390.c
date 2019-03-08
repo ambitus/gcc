@@ -13269,7 +13269,7 @@ s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
   cfun->machine->zos_varargs_pointer = reg;
 
   start_sequence ();
-  emit_move_insn (reg, gen_rtx_REG (Pmode, ARG_POINTER_REGNUM));
+  emit_move_insn (reg, gen_rtx_REG (Pmode, ARG_POINTER_REGNUM)); /* z/OS TODO: change to virtual incoming */
   seq = get_insns ();
   end_sequence ();
 
@@ -14434,9 +14434,6 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
   if (TARGET_ZOS)
     {
       /* On z/OS Load R1 with the arg pointer */
-      /* TODO: I'm not sure why this save is necessary, but it works for now */
-      arg_save = assign_stack_local (Pmode, GET_MODE_SIZE (Pmode), 0);
-      emit_move_insn (arg_save, arg_pointer_rtx);
       emit_move_insn (arg_pointer_rtx, virtual_outgoing_args_rtx);
 
       /* Set up NAB pointer */
@@ -14567,9 +14564,6 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
       gcc_assert (retaddr_reg != NULL_RTX);
       use_reg (&CALL_INSN_FUNCTION_USAGE (insn), gen_rtx_REG (Pmode, 12));
     }
-
-  if (TARGET_ZOS)
-    emit_move_insn (arg_pointer_rtx, arg_save);
 
   return insn;
 }
@@ -17352,6 +17346,11 @@ s390_case_values_threshold (void)
   return default_case_values_threshold ();
 }
 
+static rtx
+s390_internal_arg_pointer (void) {
+  return copy_to_reg (virtual_incoming_args_rtx);
+}
+
 /* Initialize GCC target structure.  */
 
 #undef  TARGET_ASM_ALIGNED_HI_OP
@@ -17390,6 +17389,9 @@ s390_case_values_threshold (void)
 
 #undef TARGET_DELEGITIMIZE_ADDRESS
 #define TARGET_DELEGITIMIZE_ADDRESS s390_delegitimize_address
+
+#undef TARGET_INTERNAL_ARG_POINTER
+#define TARGET_INTERNAL_ARG_POINTER s390_internal_arg_pointer
 
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS s390_legitimize_address
