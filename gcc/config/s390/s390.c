@@ -354,6 +354,9 @@ const processor_table[] =
 
 extern int reload_completed;
 
+/* Size of the reserved save area at the start of most stack frames.  */
+#define F4SA_DSA_SIZE 152
+
 /* Kept up to date using the SCHED_VARIABLE_ISSUE hook.  */
 static rtx_insn *last_scheduled_insn;
 #define MAX_SCHED_UNITS 3
@@ -11017,7 +11020,7 @@ save_fpr (rtx base, int offset, int regnum)
   rtx addr;
   addr = gen_rtx_MEM (DFmode, plus_constant (Pmode, base, offset));
 
-  if (regnum >= 16 && regnum <= (16 + FP_ARG_NUM_REG))
+  if (!TARGET_ZOS && regnum >= 16 && regnum <= (16 + FP_ARG_NUM_REG))
     set_mem_alias_set (addr, get_varargs_alias_set ());
   else
     set_mem_alias_set (addr, get_frame_alias_set ());
@@ -11605,6 +11608,16 @@ s390_outgoing_args_size (void)
   return ACCUMULATE_OUTGOING_ARGS ? crtl->outgoing_args_size : 0;
 }
 
+/* Return the size of the current frame before considering fpr/vr
+   saves.  */
+
+static HOST_WIDE_INT
+zos_base_static_frame_size (void)
+{
+  return s390_outgoing_args_size () + get_frame_size ()
+    + F4SA_DSA_SIZE;
+}
+
 void
 s390_emit_f4sa_prologue (void)
 {
@@ -11658,8 +11671,10 @@ s390_emit_f4sa_prologue (void)
 
   /* Save GPRs.  */
 
-  HOST_WIDE_INT frame_size;
+  rtx_insn *extra_saves_insns = NULL;
+  HOST_WIDE_INT total_frame_size;
   int first = cfun_frame_layout.first_save_gpr;
+  int i;
 
   /* Save gprs to fprs when possible.  */
   s390_save_gprs_to_fprs ();
@@ -11669,12 +11684,35 @@ s390_emit_f4sa_prologue (void)
 			  F4SA_GPR_OFFSET (first), first,
 			  cfun_frame_layout.last_save_gpr));
 
+  /* Generate saves for fprs.
+     z/OS TODO: We currently shove the fpr saves at the very bottom
+     of the static stack area, after locals, args, and everything else.
+     That's kind of a hack, ideally they should be right after the
+     regular saves.  */
+  total_frame_size = zos_base_static_frame_size ();
+
+  start_sequence ();
+  if (cfun_save_high_fprs_p)
+    for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
+      if (cfun_fpr_save_p (i))
+	{
+	  rtx save = save_fpr (hard_frame_pointer_rtx,
+			       total_frame_size, i);
+	  RTX_FRAME_RELATED_P (save) = 1;
+	  total_frame_size += 8;
+	}
+
+  /* z/OS TODO: Generate saves for vrs.  */
+
+  extra_saves_insns = get_insns ();
+  end_sequence ();
+
   /* Create a new DSA if necessary.
      z/OS TODO: The 'if necessary' part might complicate CFI. Check if
      gcc can figure out what to do.  */
-
-  frame_size = get_frame_size ();
-  if (!crtl->is_leaf || frame_size > 0 || cfun->calls_alloca)
+  if (!crtl->is_leaf
+      || (total_frame_size - F4SA_DSA_SIZE) > 0
+      || cfun->calls_alloca)
     {
       /* Only create a new DSA in non-leaf functions that don't use
 	 the stack.
@@ -11717,8 +11755,7 @@ s390_emit_f4sa_prologue (void)
       insn = emit_move_insn (addr, hard_frame_pointer_rtx);
 
       /* r0 <- r15 + min size of stack area used by function  */
-      next_nab_offset = s390_outgoing_args_size () + frame_size
-			+ STACK_POINTER_OFFSET;
+      next_nab_offset = total_frame_size;
       gcc_checking_assert (next_nab_offset >= 152);
 
       r0 = gen_rtx_REG (Pmode, 0);
@@ -11749,9 +11786,11 @@ s390_emit_f4sa_prologue (void)
       insn = emit_move_insn (hard_frame_pointer_rtx, r15);
       add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
       RTX_FRAME_RELATED_P (insn) = 1;
-    }
 
-  /* z/OS TODO: Save FPRs and VRs here.  */
+      /* Emit fpr/vr saves.  */
+      if (cfun_save_high_fprs_p && extra_saves_insns)
+	emit_insn_after (extra_saves_insns, insn);
+    }
 
   /* z/OS TODO: What does this do? */
   if (cfun->machine->base_reg)
@@ -12123,17 +12162,36 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   rtx addr, insn;
   int first = cfun_frame_layout.first_restore_gpr;
   int last = cfun_frame_layout.last_restore_gpr;
+  HOST_WIDE_INT total_frame_size;
+  int i;
 
   if (sibcall)
     {
       sorry("Sibcalls are not implemented for F4SA\n");
     }
 
-  /* z/OS TODO: Restore FPRs and VRs here.  */
+  total_frame_size = zos_base_static_frame_size ();
+
+  /* Emit restores for fprs.  */
+  if (cfun_save_high_fprs_p)
+    for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
+      if (cfun_fpr_save_p (i))
+	{
+	  rtx restore = restore_fpr (hard_frame_pointer_rtx,
+				     total_frame_size, i);
+	  RTX_FRAME_RELATED_P (restore) = 1;
+	  add_reg_note (restore, REG_CFA_RESTORE,
+			gen_rtx_REG (Pmode, i));
+	  total_frame_size += 8;
+	}
+
+  /* z/OS TODO: Emit restores for vrs.  */
 
   /* Swap to previous DSA if necessary.  */
 
-  if (!crtl->is_leaf || get_frame_size () > 0 || cfun->calls_alloca)
+  if (!crtl->is_leaf
+      || (total_frame_size - F4SA_DSA_SIZE) > 0
+      || cfun->calls_alloca)
     {
       /* r13 <- 128(r13)  */
       addr = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
@@ -12147,7 +12205,6 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   if (first != -1)
     {
       /* Restore GPRs.  */
-      int i;
       rtx cfa_restores = NULL_RTX;
 
       gcc_checking_assert (last != -1);
