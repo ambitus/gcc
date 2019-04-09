@@ -44,7 +44,7 @@
    executables or PIEs.  */
 #undef  LINK_SPEC
 #define LINK_SPEC \
-  "%{m64:-m pos390 -b elf64-s390} \
+  "%{m64:-m po64_s390 -b elf64-s390} \
    %{shared:-shared} \
    %{!shared: \
       %{static:-static} \
