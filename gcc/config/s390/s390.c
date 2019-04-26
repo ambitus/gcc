@@ -10247,6 +10247,8 @@ s390_register_info ()
 	    || cfun->calls_alloca);
 
     }
+  else
+    clobbered_regs[STACK_POINTER_REGNUM] |= cfun->calls_alloca;
 
   set_gpr_save_slots_from_clobbers (clobbered_regs);
 
@@ -10932,10 +10934,10 @@ s390_can_eliminate (const int from, const int to)
   gcc_assert (to == STACK_POINTER_REGNUM
 	      || to == HARD_FRAME_POINTER_REGNUM);
 
-  if (!TARGET_ZOS)
-    gcc_assert (from == FRAME_POINTER_REGNUM
-		|| from == ARG_POINTER_REGNUM
-		|| from == RETURN_ADDRESS_POINTER_REGNUM);
+  gcc_assert (from == FRAME_POINTER_REGNUM
+	      || from == ARG_POINTER_REGNUM
+	      || from == RETURN_ADDRESS_POINTER_REGNUM
+	      || (TARGET_ZOS && from == STACK_POINTER_REGNUM));
 
   /* Make sure we actually saved the return address.  */
   if (from == RETURN_ADDRESS_POINTER_REGNUM)
@@ -10943,6 +10945,13 @@ s390_can_eliminate (const int from, const int to)
 	&& !cfun->stdarg
 	&& !cfun_frame_layout.save_return_addr_p)
       return false;
+
+  /* We need a real stack pointer register to support dynamic stack
+     allocation on z/OS (for now).  */
+  if (TARGET_ZOS
+      && from == STACK_POINTER_REGNUM
+      && cfun->calls_alloca)
+    return false;
 
   return true;
 }
@@ -11060,8 +11069,10 @@ global_not_special_regno_p (int regno)
        from the regular callee-saved reg list? Also, if we go with a PIC
        reg, expand the special reg list.  */
     return (global_regs[regno]
-	    && !(regno == 13
-		 || regno == RETURN_REGNUM));
+	    && !(regno == HARD_FRAME_POINTER_REGNUM
+		 || regno == RETURN_REGNUM
+		 || (cfun->calls_alloca
+		     && regno == STACK_POINTER_REGNUM)));
 }
 
 /* Generate insn to save registers FIRST to LAST into
@@ -11576,28 +11587,43 @@ allocate_stack_space (rtx size, HOST_WIDE_INT last_probe_offset,
 void
 s390_allocate_stack (rtx op0, rtx op1)
 {
-#if TARGET_ZOS==1
-  rtx want = gen_reg_rtx (Pmode);
-  rtx tmp = gen_reg_rtx (Pmode);
-  rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
-  rtx nab = gen_rtx_MEM (Pmode, plus_constant (Pmode, reg, 144));
-
-  emit_move_insn (tmp, op1);
-  emit_insn (gen_adddi3 (tmp, tmp, nab));
-  emit_move_insn (nab, tmp);
-
-  emit_move_insn (op0, virtual_stack_dynamic_rtx);
-  emit_move_insn (tmp, op1);
-  emit_insn (gen_adddi3 (want, stack_pointer_rtx, tmp));
-  emit_move_insn (stack_pointer_rtx, want);
-#else
   rtx temp = gen_reg_rtx (Pmode);
 
-  emit_move_insn (temp, s390_back_chain_rtx ());
-  anti_adjust_stack (op1);
-  emit_move_insn (s390_back_chain_rtx (), temp);
-  emit_move_insn (op0, virtual_stack_dynamic_rtx);
-#endif
+  if (TARGET_ZOS)
+    {
+      rtx amount = gen_reg_rtx (Pmode);
+      rtx nab =
+	gen_rtx_MEM (Pmode,
+		     plus_constant (Pmode, hard_frame_pointer_rtx, 144));
+
+      emit_move_insn (op0, virtual_stack_dynamic_rtx);
+      emit_move_insn (amount, op1);
+
+      /* Align. 16-bytes is the largest meaningful alignment I'm
+	 aware of.
+         z/OS TODO: Extra redundant instructions are being generated,
+         fix that.
+         z/OS TODO: Multiple allocas still produce misaligned
+	 pointers.  */
+      emit_insn (gen_adddi3 (amount, amount, GEN_INT (15)));
+      emit_insn (gen_anddi3 (amount, amount, GEN_INT (~15)));
+
+      /* Both of these additions should be equivalent, we only actually
+	 do it twice because doing CFI generation might get caught up
+	 otherwise.  */
+      emit_insn (gen_adddi3 (temp, amount, nab));
+      emit_move_insn (nab, temp);
+
+      emit_insn (gen_adddi3 (temp, amount, stack_pointer_rtx));
+      emit_move_insn (stack_pointer_rtx, temp);
+    }
+  else
+    {
+      emit_move_insn (temp, s390_back_chain_rtx ());
+      anti_adjust_stack (op1);
+      emit_move_insn (s390_back_chain_rtx (), temp);
+      emit_move_insn (op0, virtual_stack_dynamic_rtx);
+    }
 }
 
 /* Report accumulated outgoing arguments size.  */
@@ -11754,8 +11780,9 @@ s390_emit_f4sa_prologue (void)
       addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, r15, 128));
       insn = emit_move_insn (addr, hard_frame_pointer_rtx);
 
-      /* r0 <- r15 + min size of stack area used by function  */
-      next_nab_offset = total_frame_size;
+      /* r0 <- r15 + min size of stack area used by function,
+	 16-byte aligned.  */
+      next_nab_offset = (total_frame_size + 15) & ~15;
       gcc_checking_assert (next_nab_offset >= 152);
 
       r0 = gen_rtx_REG (Pmode, 0);
@@ -11767,6 +11794,15 @@ s390_emit_f4sa_prologue (void)
 	 allocate_stack_space.  */
       addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, r15, 144));
       emit_move_insn (addr, r0);
+
+      /* If the function uses dynamic stack allocation, then we need to
+	 set up some register to be a stack pointer.  */
+      if (cfun->calls_alloca)
+	{
+	  gcc_assert
+	    (cfun_gpr_save_slot (STACK_POINTER_REGNUM) != SAVE_SLOT_NONE);
+	  emit_move_insn (stack_pointer_rtx, r0);
+	}
 
       /* 4(r15) <- 'F4SA' in EBCDIC.  */
       if (TARGET_EXTIMM)
