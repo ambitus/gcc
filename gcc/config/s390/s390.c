@@ -11801,6 +11801,7 @@ s390_emit_f4sa_prologue (void)
 	{
 	  gcc_assert
 	    (cfun_gpr_save_slot (STACK_POINTER_REGNUM) != SAVE_SLOT_NONE);
+	  s390_emit_stack_tie ();
 	  emit_move_insn (stack_pointer_rtx, r0);
 	}
 
