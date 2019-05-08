@@ -88,13 +88,36 @@
 #undef BASE_REGNUM
 #define BASE_REGNUM 9
 
-#define STACK_POINTER_OFFSET 152
+/* Offset from stack-pointer to first location of outgoing args.  */
+#define STACK_POINTER_OFFSET (-crtl->outgoing_args_size.to_constant ())
+
+/* Offset from the stack pointer register to an item dynamically
+   allocated on the stack, e.g., by `alloca'.  */
+#define STACK_DYNAMIC_OFFSET(FUNDECL) STACK_POINTER_OFFSET
+
+/* Defining this macro makes __builtin_frame_address(0) and
+   __builtin_return_address(0) work with -fomit-frame-pointer.  */
+#define INITIAL_FRAME_ADDRESS_RTX (hard_frame_pointer_rtx)
+
+/* The return address of the current frame is retrieved
+   from the initial value of register RETURN_REGNUM.
+   For frames farther back, we use the stack slot where
+   the corresponding RETURN_REGNUM register was saved.  */
+#define DYNAMIC_CHAIN_ADDRESS(FRAME) (plus_constant (Pmode, (FRAME), 128))
+
+/* z/OS TODO: check if this is right.  */
+#define FRAME_ADDR_RTX(FRAME) (hard_frame_pointer_rtx)
+
+#define INCOMING_FRAME_SP_OFFSET 0
 
 #define DEFAULT_PCC_STRUCT_RETURN 1
 
 #undef FUNCTION_VALUE_REGNO_P
 #define FUNCTION_VALUE_REGNO_P(N) ((N) == 15)
 
+/* Our stack grows from lower to higher addresses, local variables
+   are accessed by negative offsets from the virtual frame pointer,
+   and function arguments are stored at increasing addresses.  */
 #define STACK_GROWS_DOWNWARD 0
 
 /* z/OS TODO: The current BIGGEST_ALIGN and STRICT_ALIGNMENT in s390.h
@@ -189,12 +212,11 @@
      38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 	\
      15, 32, 33, 34, 35, 36, 37 }
 
-/* z/OS TODO: These the stack pointer rules seem suspect. Why do we need
-   them?  */
+/* Elimination rules.  */
+
 #undef ELIMINABLE_REGS
-#define ELIMINABLE_REGS           \
-{{ FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM }, \
- { BASE_REGNUM, BASE_REGNUM }, \
- { RETURN_ADDRESS_POINTER_REGNUM, STACK_POINTER_REGNUM }, \
- { RETURN_ADDRESS_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },  \
- { STACK_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM }}
+#define ELIMINABLE_REGS							\
+{{ RETURN_ADDRESS_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },		\
+ { FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },			\
+ { STACK_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },			\
+ { BASE_REGNUM, BASE_REGNUM }}

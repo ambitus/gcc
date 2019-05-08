@@ -354,9 +354,6 @@ const processor_table[] =
 
 extern int reload_completed;
 
-/* Size of the reserved save area at the start of most stack frames.  */
-#define F4SA_DSA_SIZE 152
-
 /* Kept up to date using the SCHED_VARIABLE_ISSUE hook.  */
 static rtx_insn *last_scheduled_insn;
 #define MAX_SCHED_UNITS 3
@@ -423,6 +420,8 @@ struct s390_address
 #define GP_ARG_NUM_REG 5
 #define FP_ARG_NUM_REG (TARGET_64BIT? 4 : 2)
 #define VEC_ARG_NUM_REG 8
+
+#define F4SA_DSA_SIZE 152
 
 /* A couple of shortcuts.  */
 #define CONST_OK_FOR_J(x) \
@@ -4628,6 +4627,19 @@ bool
 preferred_la_operand_p (rtx op1, rtx op2)
 {
   struct s390_address addr;
+
+  /* z/OS TODO: For some reason, after we changed up the stack
+     processing, we started to see one of the peepholes start
+     to produce LAs with invalid offsets. Figure out why this
+     hasn't been an issue for us or z/Linux until now.  */
+  if (TARGET_ZOS && CONST_INT_P (op2))
+    {
+      HOST_WIDE_INT val = INTVAL (op2);
+      if ((TARGET_LONG_DISPLACEMENT
+	   && (val < -524288 || val > 524287))
+	  || (val < 0 || val > 4095))
+	return false;
+    }
 
   if (op2 != const0_rtx)
     op1 = gen_rtx_PLUS (Pmode, op1, op2);
@@ -9731,6 +9743,7 @@ s390_output_pool_entry (rtx exp, machine_mode mode, unsigned int align)
 /* Return an RTL expression representing the value of the return address
    for the frame COUNT steps up from the current frame.  FRAME is the
    frame pointer of that frame.  */
+/* z/OS TODO: test this thoroughly.  */
 
 rtx
 s390_return_addr_rtx (int count, rtx frame ATTRIBUTE_UNUSED)
@@ -9740,7 +9753,7 @@ s390_return_addr_rtx (int count, rtx frame ATTRIBUTE_UNUSED)
 
   /* Without backchain, we fail for all but the current frame.  */
 
-  if (!TARGET_BACKCHAIN && count > 0)
+  if (!TARGET_ZOS && !TARGET_BACKCHAIN && count > 0)
     return NULL_RTX;
 
   /* For the current frame, we need to make sure the initial
@@ -9760,6 +9773,8 @@ s390_return_addr_rtx (int count, rtx frame ATTRIBUTE_UNUSED)
 
   if (TARGET_PACKED_STACK)
     offset = -2 * UNITS_PER_LONG;
+  else if (TARGET_ZOS)
+    offset = 8;
   else
     offset = RETURN_REGNUM * UNITS_PER_LONG;
 
@@ -10413,7 +10428,11 @@ s390_frame_info (void)
   if (TARGET_BACKCHAIN)
     lowest_offset = MIN (lowest_offset, cfun_frame_layout.backchain_offset);
 
-  cfun_frame_layout.frame_size += STACK_POINTER_OFFSET - lowest_offset;
+  if (!TARGET_ZOS)
+    cfun_frame_layout.frame_size += STACK_POINTER_OFFSET - lowest_offset;
+  else
+    /* z/OS TODO: Check if this is valid, it was added blindly.  */
+    cfun_frame_layout.frame_size += F4SA_DSA_SIZE - lowest_offset;
 
   /* If under 31 bit an odd number of gprs has to be saved we have to
      adjust the frame size to sustain 8 byte alignment of stack
@@ -10899,7 +10918,8 @@ s390_lra_p (void)
 }
 
 static bool
-s390_target_frame_ponter_required (void) {
+s390_target_frame_ponter_required (void)
+{
   if (TARGET_ZOS)
     return true;
   else
@@ -10911,6 +10931,7 @@ s390_target_frame_ponter_required (void) {
 static bool
 s390_can_eliminate (const int from, const int to)
 {
+  // printf ("can_eliminate %d to %d, reload done: %d\n", from, to, reload_completed);
   /* On zSeries machines, we have not marked the base register as fixed.
      Instead, we have an elimination rule BASE_REGNUM -> BASE_REGNUM.
      If a function requires the base register, we say here that this
@@ -10946,8 +10967,8 @@ s390_can_eliminate (const int from, const int to)
 	&& !cfun_frame_layout.save_return_addr_p)
       return false;
 
-  /* We need a real stack pointer register to support dynamic stack
-     allocation on z/OS (for now).  */
+  /* The alloca mechanisms appear to need a real stack pointer register
+     when dynamic stack allocation is in play.  */
   if (TARGET_ZOS
       && from == STACK_POINTER_REGNUM
       && cfun->calls_alloca)
@@ -10957,7 +10978,6 @@ s390_can_eliminate (const int from, const int to)
 }
 
 /* Return offset between register FROM and TO initially after prolog.  */
-/* z/OS TODO: This looks suspect.  */
 
 HOST_WIDE_INT
 s390_initial_elimination_offset (int from, int to)
@@ -10971,16 +10991,36 @@ s390_initial_elimination_offset (int from, int to)
   switch (from)
     {
     case STACK_POINTER_REGNUM:
-      offset = 0;
+      if (!TARGET_ZOS)
+	offset = 0;
+      else
+	{
+	  s390_init_frame_layout ();
+	  offset = (crtl->outgoing_args_size
+		    + cfun_frame_layout.high_fprs * 8
+		    + get_frame_size ()
+		    + F4SA_DSA_SIZE);
+	  // printf ("Stack ptr elim offset: %ld\n", offset);
+	}
       break;
 
     case FRAME_POINTER_REGNUM:
-      offset = (get_frame_size()
-		+ STACK_POINTER_OFFSET
-		+ crtl->outgoing_args_size);
+      if (!TARGET_ZOS)
+	offset = (get_frame_size()
+		  + STACK_POINTER_OFFSET
+		  + crtl->outgoing_args_size);
+      else
+	{
+	  gcc_assert (to == HARD_FRAME_POINTER_REGNUM);
+	  offset = (get_frame_size ()
+		    + F4SA_DSA_SIZE);
+
+	  // printf ("frame ptr elim offset: %ld\n", offset);
+	}
       break;
 
     case ARG_POINTER_REGNUM:
+      gcc_checking_assert (!TARGET_ZOS);
       s390_init_frame_layout ();
       offset = cfun_frame_layout.frame_size + STACK_POINTER_OFFSET;
       break;
@@ -10999,6 +11039,7 @@ s390_initial_elimination_offset (int from, int to)
 	  gcc_unreachable ();
 	}
 
+      /* z/OS TODO: this.  */
       /* In order to make the following work it is not necessary for
 	 r14 to have a save slot.  It is sufficient if one other GPR
 	 got one.  Since the GPRs are always stored without gaps we
@@ -11591,6 +11632,7 @@ s390_allocate_stack (rtx op0, rtx op1)
 
   if (TARGET_ZOS)
     {
+      /* z/OS TODO: Change STACK_BOUNDARY to 128, maybe. */
       rtx amount = gen_reg_rtx (Pmode);
       rtx nab =
 	gen_rtx_MEM (Pmode,
@@ -11598,15 +11640,6 @@ s390_allocate_stack (rtx op0, rtx op1)
 
       emit_move_insn (op0, virtual_stack_dynamic_rtx);
       emit_move_insn (amount, op1);
-
-      /* Align. 16-bytes is the largest meaningful alignment I'm
-	 aware of.
-         z/OS TODO: Extra redundant instructions are being generated,
-         fix that.
-         z/OS TODO: Multiple allocas still produce misaligned
-	 pointers.  */
-      emit_insn (gen_adddi3 (amount, amount, GEN_INT (15)));
-      emit_insn (gen_anddi3 (amount, amount, GEN_INT (~15)));
 
       /* Both of these additions should be equivalent, we only actually
 	 do it twice because doing CFI generation might get caught up
@@ -11624,24 +11657,6 @@ s390_allocate_stack (rtx op0, rtx op1)
       emit_move_insn (s390_back_chain_rtx (), temp);
       emit_move_insn (op0, virtual_stack_dynamic_rtx);
     }
-}
-
-/* Report accumulated outgoing arguments size.  */
-
-static inline int
-s390_outgoing_args_size (void)
-{
-  return ACCUMULATE_OUTGOING_ARGS ? crtl->outgoing_args_size : 0;
-}
-
-/* Return the size of the current frame before considering fpr/vr
-   saves.  */
-
-static HOST_WIDE_INT
-zos_base_static_frame_size (void)
-{
-  return s390_outgoing_args_size () + get_frame_size ()
-    + F4SA_DSA_SIZE;
 }
 
 void
@@ -11698,7 +11713,8 @@ s390_emit_f4sa_prologue (void)
   /* Save GPRs.  */
 
   rtx_insn *extra_saves_insns = NULL;
-  HOST_WIDE_INT total_frame_size;
+  HOST_WIDE_INT next_nab_offset;
+  HOST_WIDE_INT fprs_offset;
   int first = cfun_frame_layout.first_save_gpr;
   int i;
 
@@ -11715,7 +11731,8 @@ s390_emit_f4sa_prologue (void)
      of the static stack area, after locals, args, and everything else.
      That's kind of a hack, ideally they should be right after the
      regular saves.  */
-  total_frame_size = zos_base_static_frame_size ();
+  fprs_offset = (get_frame_size () + F4SA_DSA_SIZE);
+  // printf ("init fprs_offset: %ld\n", fprs_offset);
 
   start_sequence ();
   if (cfun_save_high_fprs_p)
@@ -11723,21 +11740,23 @@ s390_emit_f4sa_prologue (void)
       if (cfun_fpr_save_p (i))
 	{
 	  rtx save = save_fpr (hard_frame_pointer_rtx,
-			       total_frame_size, i);
+			       fprs_offset, i);
 	  RTX_FRAME_RELATED_P (save) = 1;
-	  total_frame_size += 8;
+	  fprs_offset += 8;
 	}
+  // printf ("after fp fprs_offset: %ld\n", fprs_offset);
 
   /* z/OS TODO: Generate saves for vrs.  */
 
   extra_saves_insns = get_insns ();
   end_sequence ();
 
+  next_nab_offset = fprs_offset + crtl->outgoing_args_size;
   /* Create a new DSA if necessary.
      z/OS TODO: The 'if necessary' part might complicate CFI. Check if
      gcc can figure out what to do.  */
   if (!crtl->is_leaf
-      || (total_frame_size - F4SA_DSA_SIZE) > 0
+      || next_nab_offset > F4SA_DSA_SIZE
       || cfun->calls_alloca)
     {
       /* Only create a new DSA in non-leaf functions that don't use
@@ -11763,7 +11782,6 @@ s390_emit_f4sa_prologue (void)
 	 a base reg, so isn't suitable. Any other reg would require at
 	 least one spill, even for leaves.  */
 
-      HOST_WIDE_INT next_nab_offset;
       rtx r15, r0, addr, insn, next_dsa_ptr;
 
       /* r15 <- 136(r13)
@@ -11780,9 +11798,8 @@ s390_emit_f4sa_prologue (void)
       addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, r15, 128));
       insn = emit_move_insn (addr, hard_frame_pointer_rtx);
 
-      /* r0 <- r15 + min size of stack area used by function,
-	 16-byte aligned.  */
-      next_nab_offset = (total_frame_size + 15) & ~15;
+      /* r0 <- r15 + min size of stack area used by function.  */
+      /* z/OS TODO: Do we need to manually align here?  */
       gcc_checking_assert (next_nab_offset >= 152);
 
       r0 = gen_rtx_REG (Pmode, 0);
@@ -12199,7 +12216,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   rtx addr, insn;
   int first = cfun_frame_layout.first_restore_gpr;
   int last = cfun_frame_layout.last_restore_gpr;
-  HOST_WIDE_INT total_frame_size;
+  HOST_WIDE_INT fprs_offset;
   int i;
 
   if (sibcall)
@@ -12207,19 +12224,19 @@ void s390_emit_f4sa_epilogue (bool sibcall)
       sorry("Sibcalls are not implemented for F4SA\n");
     }
 
-  total_frame_size = zos_base_static_frame_size ();
+  fprs_offset = (get_frame_size () + F4SA_DSA_SIZE);
 
   /* Emit restores for fprs.  */
   if (cfun_save_high_fprs_p)
     for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
       if (cfun_fpr_save_p (i))
 	{
-	  rtx restore = restore_fpr (hard_frame_pointer_rtx,
-				     total_frame_size, i);
+	  rtx restore =
+	    restore_fpr (hard_frame_pointer_rtx, fprs_offset, i);
 	  RTX_FRAME_RELATED_P (restore) = 1;
 	  add_reg_note (restore, REG_CFA_RESTORE,
 			gen_rtx_REG (Pmode, i));
-	  total_frame_size += 8;
+	  fprs_offset += 8;
 	}
 
   /* z/OS TODO: Emit restores for vrs.  */
@@ -12227,7 +12244,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
   /* Swap to previous DSA if necessary.  */
 
   if (!crtl->is_leaf
-      || (total_frame_size - F4SA_DSA_SIZE) > 0
+      || fprs_offset + crtl->outgoing_args_size > F4SA_DSA_SIZE
       || cfun->calls_alloca)
     {
       /* r13 <- 128(r13)  */
@@ -12269,7 +12286,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
       if (last != RETURN_REGNUM)
 	{
-	  /* Generate restores restores for the rest of the regs.  */
+	  /* Generate restores for the rest of the regs.  */
 	  for (i = first; i <= last; i++)
 	    {
 	      if (global_not_special_regno_p (i))

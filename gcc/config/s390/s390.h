@@ -502,7 +502,7 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
 
 /* Stack layout and calling conventions.  */
 
-/* Stack direction is OS-specific.  */
+/* STACK_GROWS_DOWNWARD is OS-dependent.  */
 #define FRAME_GROWS_DOWNWARD 1
 /* #undef ARGS_GROW_DOWNWARD */
 
@@ -512,40 +512,16 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
    dynamic allocations (alloca), and finally the local variables.  */
 
 /* STACK_POINTER_OFFSET is OS-dependent.  */
-
-/* Offset from the stack pointer register to an item dynamically
-   allocated on the stack, e.g., by `alloca'.  */
-#define STACK_DYNAMIC_OFFSET(FUNDECL) \
-  (STACK_POINTER_OFFSET + crtl->outgoing_args_size)
+/* STACK_DYNAMIC_OFFSET is OS-dependent.  */
 
 /* Offset of first parameter from the argument pointer register value.
    We have a fake argument pointer register that points directly to
    the argument area.  */
 #define FIRST_PARM_OFFSET(FNDECL) 0
 
-/* Defining this macro makes __builtin_frame_address(0) and
-   __builtin_return_address(0) work with -fomit-frame-pointer.  */
-#define INITIAL_FRAME_ADDRESS_RTX                                             \
-  (plus_constant (Pmode, arg_pointer_rtx, -STACK_POINTER_OFFSET))
-
-/* The return address of the current frame is retrieved
-   from the initial value of register RETURN_REGNUM.
-   For frames farther back, we use the stack slot where
-   the corresponding RETURN_REGNUM register was saved.  */
-#define DYNAMIC_CHAIN_ADDRESS(FRAME)                                          \
-  (TARGET_PACKED_STACK ?                                                      \
-   plus_constant (Pmode, (FRAME),					      \
-		  STACK_POINTER_OFFSET - UNITS_PER_LONG) : (FRAME))
-
-/* For -mpacked-stack this adds 160 - 8 (96 - 4) to the output of
-   builtin_frame_address.  Otherwise arg pointer -
-   STACK_POINTER_OFFSET would be returned for
-   __builtin_frame_address(0) what might result in an address pointing
-   somewhere into the middle of the local variables since the packed
-   stack layout generally does not need all the bytes in the register
-   save area.  */
-#define FRAME_ADDR_RTX(FRAME)			\
-  DYNAMIC_CHAIN_ADDRESS ((FRAME))
+/* INITIAL_FRAME_ADDRESS_RTX is OS-dependent.  */
+/* DYNAMIC_CHAIN_ADDRESS is OS-dependent.  */
+/* FRAME_ADDR_RTX Is OS-dependent.  */
 
 #define RETURN_ADDR_RTX(COUNT, FRAME)					      \
   s390_return_addr_rtx ((COUNT), DYNAMIC_CHAIN_ADDRESS ((FRAME)))
@@ -558,7 +534,7 @@ extern const enum reg_class regclass_map[FIRST_PSEUDO_REGISTER];
 
 /* Describe calling conventions for DWARF-2 exception handling.  */
 #define INCOMING_RETURN_ADDR_RTX  gen_rtx_REG (Pmode, RETURN_REGNUM)
-#define INCOMING_FRAME_SP_OFFSET STACK_POINTER_OFFSET
+/* INCOMING_FRAME_SP_OFFSET is OS-dependent.  */
 #define DWARF_FRAME_RETURN_COLUMN  14
 
 /* Describe how we implement __builtin_eh_return.  */

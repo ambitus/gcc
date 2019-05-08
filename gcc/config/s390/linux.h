@@ -118,7 +118,7 @@ along with GCC; see the file COPYING3.  If not see
 #define STACK_POINTER_REGNUM 15
 #undef HARD_FRAME_POINTER_REGNUM
 #define HARD_FRAME_POINTER_REGNUM 11
-#undef ARG_POINTER_REGNUM 
+#undef ARG_POINTER_REGNUM
 #define ARG_POINTER_REGNUM 32
 
 /* Only gpr 2, fpr 0, and v24 are ever used as return registers.  */
@@ -133,6 +133,37 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Offset from stack-pointer to first location of outgoing args.  */
 #define STACK_POINTER_OFFSET (TARGET_64BIT ? 160 : 96)
+
+/* Offset from the stack pointer register to an item dynamically
+   allocated on the stack, e.g., by `alloca'.  */
+#define STACK_DYNAMIC_OFFSET(FUNDECL)			\
+  (STACK_POINTER_OFFSET + crtl->outgoing_args_size)
+
+/* Defining this macro makes __builtin_frame_address(0) and
+   __builtin_return_address(0) work with -fomit-frame-pointer.  */
+#define INITIAL_FRAME_ADDRESS_RTX					\
+  (plus_constant (Pmode, arg_pointer_rtx, -STACK_POINTER_OFFSET))
+
+/* The return address of the current frame is retrieved
+   from the initial value of register RETURN_REGNUM.
+   For frames farther back, we use the stack slot where
+   the corresponding RETURN_REGNUM register was saved.  */
+#define DYNAMIC_CHAIN_ADDRESS(FRAME)					\
+  (TARGET_PACKED_STACK ?						\
+   plus_constant (Pmode, (FRAME),					\
+		  STACK_POINTER_OFFSET - UNITS_PER_LONG) : (FRAME))
+
+/* For -mpacked-stack this adds 160 - 8 (96 - 4) to the output of
+   builtin_frame_address.  Otherwise arg pointer -
+   STACK_POINTER_OFFSET would be returned for
+   __builtin_frame_address(0) what might result in an address pointing
+   somewhere into the middle of the local variables since the packed
+   stack layout generally does not need all the bytes in the register
+   save area.  */
+#define FRAME_ADDR_RTX(FRAME)			\
+  DYNAMIC_CHAIN_ADDRESS ((FRAME))
+
+#define INCOMING_FRAME_SP_OFFSET STACK_POINTER_OFFSET
 
 /* Set up fixed registers and calling convention:
 
