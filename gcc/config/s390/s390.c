@@ -10432,7 +10432,7 @@ s390_frame_info (void)
     cfun_frame_layout.frame_size += STACK_POINTER_OFFSET - lowest_offset;
   else
     /* z/OS TODO: Check if this is valid, it was added blindly.  */
-    cfun_frame_layout.frame_size += F4SA_DSA_SIZE - lowest_offset;
+    cfun_frame_layout.frame_size += F4SA_DSA_SIZE;
 
   /* If under 31 bit an odd number of gprs has to be saved we have to
      adjust the frame size to sustain 8 byte alignment of stack
@@ -10479,7 +10479,7 @@ s390_init_frame_layout (void)
 	 as base register to avoid save/restore overhead.  */
       if (!base_used)
 	cfun->machine->base_reg = NULL_RTX;
-      else
+      else if (!TARGET_ZOS)
 	{
 	  int br = 0;
 
@@ -10490,6 +10490,11 @@ s390_init_frame_layout (void)
 	  cfun->machine->base_reg =
 	    gen_rtx_REG (Pmode, (br >= 2) ? br : BASE_REGNUM);
 	}
+      else
+	/* z/OS TODO: Are there any neat optimizations we could
+	   do here?  */
+	cfun->machine->base_reg = gen_rtx_REG (Pmode, BASE_REGNUM);
+
 
       s390_register_info ();
       s390_frame_info ();
@@ -11801,6 +11806,13 @@ s390_emit_f4sa_prologue (void)
       /* r0 <- r15 + min size of stack area used by function.  */
       /* z/OS TODO: Do we need to manually align here?  */
       gcc_checking_assert (next_nab_offset >= 152);
+      /* z/OS TODO: if this assert never trips anything up, then we could
+	 unify the DSA checking here, in the epilogue, and in the base
+	 reg processing.  */
+      gcc_checking_assert (((next_nab_offset +
+			     STACK_BOUNDARY / BITS_PER_UNIT - 1)
+			    & ~(STACK_BOUNDARY / BITS_PER_UNIT - 1))
+			   == cfun_frame_layout.frame_size);
 
       r0 = gen_rtx_REG (Pmode, 0);
       emit_move_insn (r0,
@@ -11846,7 +11858,6 @@ s390_emit_f4sa_prologue (void)
 	emit_insn_after (extra_saves_insns, insn);
     }
 
-  /* z/OS TODO: What does this do? */
   if (cfun->machine->base_reg)
     emit_insn (gen_main_pool (cfun->machine->base_reg));
 
@@ -12727,6 +12738,12 @@ s390_can_use_return_insn (void)
     return false;
 
   if (TARGET_TPF_PROFILING)
+    return false;
+
+  if (TARGET_ZOS
+      && (!crtl->is_leaf
+	  || cfun_save_arg_fprs_p
+	  || cfun->calls_alloca))
     return false;
 
   for (i = 0; i < 16; i++)
