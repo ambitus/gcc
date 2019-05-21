@@ -89,22 +89,25 @@ if [info exists TORTURE_OPTIONS] {
 	{ -O3 -g } \
 	{ -Os } ]
 
-    if [check_effective_target_lto] {
-        # When having plugin test both slim and fat LTO and plugin/nonplugin
-        # path.
-	if [check_linker_plugin_available] {
-           set LTO_TORTURE_OPTIONS [list \
-	      { -O2 -flto -fno-use-linker-plugin -flto-partition=none } \
-	      { -O2 -flto -fuse-linker-plugin -fno-fat-lto-objects }
-           ]
-        } else {
-           set LTO_TORTURE_OPTIONS [list \
-	      { -O2 -flto -flto-partition=none } \
-	      { -O2 -flto }
-           ]
-        }
-        set gcc_force_conventional_output "-ffat-lto-objects"
-    }
+### LSSZ ###
+# Commented to avoid tcl errors because of linker error because of "-flto" option
+#    if [check_effective_target_lto] {
+#        # When having plugin test both slim and fat LTO and plugin/nonplugin
+#        # path.
+#	if [check_linker_plugin_available] {
+#           set LTO_TORTURE_OPTIONS [list \
+#	      { -O2 -flto -fno-use-linker-plugin -flto-partition=none } \
+#	      { -O2 -flto -fuse-linker-plugin -fno-fat-lto-objects }
+#           ]
+#        } else {
+#           set LTO_TORTURE_OPTIONS [list \
+#	      { -O2 -flto -flto-partition=none } \
+#	      { -O2 -flto }
+#           ]
+#        }
+#        set gcc_force_conventional_output "-ffat-lto-objects"
+#    }
+### LSSZ ###
 }
 
 if [info exists ADDITIONAL_TORTURE_OPTIONS] {
