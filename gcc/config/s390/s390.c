@@ -4620,6 +4620,7 @@ legitimate_la_operand_p (rtx op)
   return (TARGET_64BIT || addr.pointer);
 }
 
+
 /* Return true if it is valid *and* preferable to use LA to
    compute the sum of OP1 and OP2.  */
 
@@ -4632,13 +4633,27 @@ preferred_la_operand_p (rtx op1, rtx op2)
      processing, we started to see one of the peepholes start
      to produce LAs with invalid offsets. Figure out why this
      hasn't been an issue for us or z/Linux until now.  */
-  if (TARGET_ZOS && CONST_INT_P (op2))
+  if (TARGET_ZOS)
     {
-      HOST_WIDE_INT val = INTVAL (op2);
-      if ((TARGET_LONG_DISPLACEMENT
-	   && (val < -524288 || val > 524287))
-	  || (val < 0 || val > 4095))
-	return false;
+      //printf ("in ZOS\n");
+#define CHECK_FITS_IN_DISP(op)						\
+      if (CONST_INT_P (op))						\
+	{								\
+	  HOST_WIDE_INT val = INTVAL (op);				\
+	  if (TARGET_LONG_DISPLACEMENT)					\
+	    {								\
+	      if (val < -524288 || val > 524287)			\
+		return false;						\
+	    }								\
+	  else								\
+	    if (val < 0 || val > 4095)					\
+	      return false;						\
+	}
+      CHECK_FITS_IN_DISP (op1);
+      //printf ("passed one \n");
+      CHECK_FITS_IN_DISP (op2);
+      //printf ("passed two \n");
+#undef CHECK_FITS_IN_DISP
     }
 
   if (op2 != const0_rtx)
@@ -11788,6 +11803,7 @@ s390_emit_f4sa_prologue (void)
 	 least one spill, even for leaves.  */
 
       rtx r15, r0, addr, insn, next_dsa_ptr;
+      rtx increment;
 
       /* r15 <- 136(r13)
 	 Also mark r15 as the new CFA reg.  */
@@ -11804,6 +11820,7 @@ s390_emit_f4sa_prologue (void)
       insn = emit_move_insn (addr, hard_frame_pointer_rtx);
 
       /* r0 <- r15 + min size of stack area used by function.  */
+
       /* z/OS TODO: Do we need to manually align here?  */
       gcc_checking_assert (next_nab_offset >= 152);
       /* z/OS TODO: if this assert never trips anything up, then we could
@@ -11815,8 +11832,38 @@ s390_emit_f4sa_prologue (void)
 			   == cfun_frame_layout.frame_size);
 
       r0 = gen_rtx_REG (Pmode, 0);
-      emit_move_insn (r0,
-		      plus_constant (Pmode, r15, next_nab_offset));
+      increment = GEN_INT (next_nab_offset);
+
+      /* Increment the NAB (our SP).  */
+      /* z/OS TODO: how does the linux port do SP increments?  */
+      if (preferred_la_operand_p (r15, increment))
+	emit_move_insn (r0, gen_rtx_PLUS (Pmode, r15, increment));
+      else
+	{
+	  rtx add, clob;
+	  emit_move_insn (r0, r15);
+
+	  /* Allow this insn to clobber CC if necessary.  */
+	  clob = gen_rtx_CLOBBER (VOIDmode,
+				  gen_rtx_REG (CCmode, CC_REGNUM));
+	  if ((next_nab_offset >= -32768L && next_nab_offset <= 32767L)
+	      || (TARGET_EXTIMM
+		  && next_nab_offset >= -2147483648L
+		  && next_nab_offset <= 2147483647L))
+	    add = gen_rtx_PLUS (Pmode, r0, increment);
+	  else
+	    {
+	      /* z/OS TODO: handle bigger stack frames here by generating
+		 multiple instructions.  */
+	      error ("A stack frame was found to be "
+		     HOST_WIDE_INT_PRINT_DEC " bytes, which we don't "
+		     "handle correctly yet for z/OS", next_nab_offset);
+	      gcc_unreachable ();
+	    }
+	  add = gen_rtx_SET (r0, add);
+	  emit_insn (gen_rtx_PARALLEL (VOIDmode,
+				       gen_rtvec (2, add, clob)));
+	}
 
       /* 144(r15) <- r0  */
       /* z/OS TODO: emit stack probes/stack checking code. Use
@@ -14550,7 +14597,6 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 {
   bool plt_call = false;
   rtx_insn *insn;
-  rtx arg_save;
   rtx vec[4] = { NULL_RTX };
   int elts = 0;
   rtx *call = &vec[0];
