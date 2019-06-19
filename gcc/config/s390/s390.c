@@ -12325,13 +12325,18 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
       if (first == RETURN_REGNUM)
 	{
+	  rtx r14 = gen_rtx_REG (Pmode, 14);
 	  /* Generate a restore for r14. We can't just generate an lmg
 	     starting at r14, because that would clobber r15, our return
 	     value.  */
 	  addr = plus_constant (Pmode, hard_frame_pointer_rtx,
 				F4SA_GPR_OFFSET (RETURN_REGNUM));
 	  addr = gen_rtx_MEM (Pmode, addr);
-	  emit_move_insn (gen_rtx_REG (Pmode, RETURN_REGNUM), addr);
+	  insn = emit_move_insn (r14, addr);
+
+	  add_reg_note (insn, REG_CFA_RESTORE, r14);
+	  RTX_FRAME_RELATED_P (insn) = 1;
+
 	  /* Find next reg which should be restored.  */
 	  for (first = 1;
 	       first < last && cfun_gpr_save_slot (first) != SAVE_SLOT_STACK;
