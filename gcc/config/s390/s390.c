@@ -4635,24 +4635,15 @@ preferred_la_operand_p (rtx op1, rtx op2)
      hasn't been an issue for us or z/Linux until now.  */
   if (TARGET_ZOS)
     {
-      //printf ("in ZOS\n");
 #define CHECK_FITS_IN_DISP(op)						\
       if (CONST_INT_P (op))						\
 	{								\
 	  HOST_WIDE_INT val = INTVAL (op);				\
-	  if (TARGET_LONG_DISPLACEMENT)					\
-	    {								\
-	      if (val < -524288 || val > 524287)			\
-		return false;						\
-	    }								\
-	  else								\
-	    if (val < 0 || val > 4095)					\
-	      return false;						\
+	  if (!DISP_IN_RANGE (val))					\
+	    return false;						\
 	}
       CHECK_FITS_IN_DISP (op1);
-      //printf ("passed one \n");
       CHECK_FITS_IN_DISP (op2);
-      //printf ("passed two \n");
 #undef CHECK_FITS_IN_DISP
     }
 
@@ -11836,7 +11827,7 @@ s390_emit_f4sa_prologue (void)
 
       /* Increment the NAB (our SP).  */
       /* z/OS TODO: how does the linux port do SP increments?  */
-      if (preferred_la_operand_p (r15, increment))
+      if (DISP_IN_RANGE (next_nab_offset))
 	emit_move_insn (r0, gen_rtx_PLUS (Pmode, r15, increment));
       else
 	{
