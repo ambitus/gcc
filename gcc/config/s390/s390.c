@@ -11670,6 +11670,71 @@ s390_allocate_stack (rtx op0, rtx op1)
     }
 }
 
+/* Emit conditional traps that check against STACK_POINTER as necessary
+   to support our -mstack-size/-mstack-guard options.  */
+
+void
+emit_stack_size_traps (rtx stack_pointer)
+{
+  HOST_WIDE_INT stack_guard;
+
+  if (s390_stack_guard)
+    stack_guard = s390_stack_guard;
+  else
+    {
+      /* If no value for stack guard is provided the smallest power of 2
+	 larger than the current frame size is chosen.  */
+      stack_guard = 1;
+      while (stack_guard < cfun_frame_layout.frame_size)
+	stack_guard <<= 1;
+    }
+
+  if (cfun_frame_layout.frame_size >= s390_stack_size)
+    {
+      warning (0, "frame size of function %qs is %wd"
+	       " bytes exceeding user provided stack limit of "
+	       "%d bytes.  "
+	       "An unconditional trap is added.",
+	       current_function_name(), cfun_frame_layout.frame_size,
+	       s390_stack_size);
+      emit_insn (gen_trap ());
+      emit_barrier ();
+    }
+  else
+    {
+      /* stack_guard has to be smaller than s390_stack_size.
+	 Otherwise we would emit an AND with zero which would
+	 not match the test under mask pattern.  */
+      if (stack_guard >= s390_stack_size)
+	{
+	  warning (0, "frame size of function %qs is %wd"
+		   " bytes which is more than half the stack size. "
+		   "The dynamic check would not be reliable. "
+		   "No check emitted for this function.",
+		   current_function_name(),
+		   cfun_frame_layout.frame_size);
+	}
+      else
+	{
+	  rtx stack_check_mask = GEN_INT ((s390_stack_size - 1)
+					  & ~(stack_guard - 1));
+	  rtx trap_val = (STACK_GROWS_DOWNWARD
+			  ? const0_rtx : stack_check_mask);
+
+	  rtx t = gen_rtx_AND (Pmode, stack_pointer,
+			       stack_check_mask);
+	  if (TARGET_64BIT)
+	    emit_insn (gen_ctrapdi4 (gen_rtx_EQ (VOIDmode,
+						 t, trap_val),
+				     t, trap_val, const0_rtx));
+	  else
+	    emit_insn (gen_ctrapsi4 (gen_rtx_EQ (VOIDmode,
+						 t, trap_val),
+				     t, trap_val, const0_rtx));
+	}
+    }
+}
+
 void
 s390_emit_f4sa_prologue (void)
 {
@@ -11738,10 +11803,10 @@ s390_emit_f4sa_prologue (void)
 			  cfun_frame_layout.last_save_gpr));
 
   /* Generate saves for fprs.
-     z/OS TODO: We currently shove the fpr saves at the very bottom
-     of the static stack area, after locals, args, and everything else.
-     That's kind of a hack, ideally they should be right after the
-     regular saves.  */
+     z/OS TODO: We currently shove the fpr saves right after the soft
+     frame pointer (after the locals and before the dynamic area). That's
+     kind of a hack, ideally they should be right after the regular
+     saves.  */
   fprs_offset = (get_frame_size () + F4SA_DSA_SIZE);
   // printf ("init fprs_offset: %ld\n", fprs_offset);
 
@@ -11806,21 +11871,29 @@ s390_emit_f4sa_prologue (void)
       add_reg_note (insn, REG_CFA_DEF_CFA, addr);
       RTX_FRAME_RELATED_P (insn) = 1;
 
+      if (s390_stack_size)
+	emit_stack_size_traps (next_dsa_ptr);
+
       /* 128(r15) <- r13  */
       addr = gen_rtx_MEM (Pmode, plus_constant (Pmode, r15, 128));
       insn = emit_move_insn (addr, hard_frame_pointer_rtx);
 
       /* r0 <- r15 + min size of stack area used by function.  */
 
-      /* z/OS TODO: Do we need to manually align here?  */
       gcc_checking_assert (next_nab_offset >= 152);
+
+      /* Align.  */
+      next_nab_offset = ((next_nab_offset +
+			  STACK_BOUNDARY / BITS_PER_UNIT - 1)
+			 & ~(STACK_BOUNDARY / BITS_PER_UNIT - 1));
+
       /* z/OS TODO: if this assert never trips anything up, then we could
 	 unify the DSA checking here, in the epilogue, and in the base
 	 reg processing.  */
-      gcc_checking_assert (((next_nab_offset +
-			     STACK_BOUNDARY / BITS_PER_UNIT - 1)
-			    & ~(STACK_BOUNDARY / BITS_PER_UNIT - 1))
-			   == cfun_frame_layout.frame_size);
+      gcc_checking_assert (next_nab_offset == cfun_frame_layout.frame_size);
+
+      if (flag_stack_usage_info)
+	current_function_static_stack_size = next_nab_offset;
 
       r0 = gen_rtx_REG (Pmode, 0);
       increment = GEN_INT (next_nab_offset);
@@ -11894,6 +11967,11 @@ s390_emit_f4sa_prologue (void)
       /* Emit fpr/vr saves.  */
       if (cfun_save_high_fprs_p && extra_saves_insns)
 	emit_insn_after (extra_saves_insns, insn);
+    }
+  else
+    {
+      if (flag_stack_usage_info)
+	current_function_static_stack_size = 0;
     }
 
   if (cfun->machine->base_reg)
@@ -12039,63 +12117,7 @@ s390_emit_prologue (void)
       bool temp_reg_clobbered_p;
 
       if (s390_stack_size)
-	{
-	  HOST_WIDE_INT stack_guard;
-
-	  if (s390_stack_guard)
-	    stack_guard = s390_stack_guard;
-	  else
-	    {
-	      /* If no value for stack guard is provided the smallest power of 2
-		 larger than the current frame size is chosen.  */
-	      stack_guard = 1;
-	      while (stack_guard < cfun_frame_layout.frame_size)
-		stack_guard <<= 1;
-	    }
-
-	  if (cfun_frame_layout.frame_size >= s390_stack_size)
-	    {
-	      warning (0, "frame size of function %qs is %wd"
-		       " bytes exceeding user provided stack limit of "
-		       "%d bytes.  "
-		       "An unconditional trap is added.",
-		       current_function_name(), cfun_frame_layout.frame_size,
-		       s390_stack_size);
-	      emit_insn (gen_trap ());
-	      emit_barrier ();
-	    }
-	  else
-	    {
-	      /* stack_guard has to be smaller than s390_stack_size.
-		 Otherwise we would emit an AND with zero which would
-		 not match the test under mask pattern.  */
-	      if (stack_guard >= s390_stack_size)
-		{
-		  warning (0, "frame size of function %qs is %wd"
-			   " bytes which is more than half the stack size. "
-			   "The dynamic check would not be reliable. "
-			   "No check emitted for this function.",
-			   current_function_name(),
-			   cfun_frame_layout.frame_size);
-		}
-	      else
-		{
-		  HOST_WIDE_INT stack_check_mask = ((s390_stack_size - 1)
-						    & ~(stack_guard - 1));
-
-		  rtx t = gen_rtx_AND (Pmode, stack_pointer_rtx,
-				       GEN_INT (stack_check_mask));
-		  if (TARGET_64BIT)
-		    emit_insn (gen_ctrapdi4 (gen_rtx_EQ (VOIDmode,
-							 t, const0_rtx),
-					     t, const0_rtx, const0_rtx));
-		  else
-		    emit_insn (gen_ctrapsi4 (gen_rtx_EQ (VOIDmode,
-							 t, const0_rtx),
-					     t, const0_rtx, const0_rtx));
-		}
-	    }
-  	}
+	emit_stack_size_traps (stack_pointer_rtx);
 
       if (s390_warn_framesize > 0
 	  && cfun_frame_layout.frame_size >= s390_warn_framesize)
