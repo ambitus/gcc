@@ -11007,10 +11007,12 @@ s390_initial_elimination_offset (int from, int to)
       else
 	{
 	  s390_init_frame_layout ();
-	  offset = (crtl->outgoing_args_size
-		    + cfun_frame_layout.high_fprs * 8
+	  offset = (cfun_frame_layout.high_fprs * 8
 		    + get_frame_size ()
 		    + F4SA_DSA_SIZE);
+
+	  if (!crtl->is_leaf)
+	    offset += crtl->outgoing_args_size;
 	  // printf ("Stack ptr elim offset: %ld\n", offset);
 	}
       break;
@@ -11072,14 +11074,48 @@ s390_initial_elimination_offset (int from, int to)
   return offset;
 }
 
-/* Emit insn to save fpr REGNUM at offset OFFSET relative
-   to register BASE.  Return generated insn.  */
+/* Gen expressions or emit insns to create a memory reference to
+   BASE + OFFSET, suitable for use in an RX[Y] type instruction,
+   potentially using TEMP as a temporary. Return the reference as a
+   MEM.  */
 
 static rtx
-save_fpr (rtx base, int offset, int regnum)
+base_plus_off_to_mem (rtx base, HOST_WIDE_INT offset, rtx temp)
 {
-  rtx addr;
-  addr = gen_rtx_MEM (DFmode, plus_constant (Pmode, base, offset));
+  if (DISP_IN_RANGE (offset))
+    return gen_rtx_MEM (DFmode, plus_constant (Pmode, base, offset));
+
+  /* If the offset is too large, force it into the literal pool,
+     then load it into a temp reg, and use that as an index reg.  */
+
+  gcc_assert (temp != NULL_RTX && REG_P (temp));
+
+  if ((offset >= -32768L && offset <= 32767L)
+      || (TARGET_EXTIMM
+	  && offset >= -2147483648L
+	  && offset <= 2147483647L))
+    emit_insn (gen_rtx_SET (temp, GEN_INT (offset)));
+  else
+    {
+      /* z/OS TODO: handle bigger offsets here. Unify this with the
+	 prologue stack increment.  */
+      error ("A base reg offset was found to be "
+	     HOST_WIDE_INT_PRINT_DEC " bytes, which we don't "
+	     "handle correctly yet for z/OS", offset);
+      gcc_unreachable ();
+    }
+
+  return gen_rtx_MEM (DFmode, gen_rtx_PLUS (Pmode, temp, base));
+}
+
+/* Emit insn to save fpr REGNUM at offset OFFSET relative
+   to register BASE, potentially using TEMP as a temporary.
+   Return generated insn.  */
+
+static rtx
+save_fpr (rtx base, int offset, int regnum, rtx temp)
+{
+  rtx addr = base_plus_off_to_mem (base, offset, temp);
 
   if (!TARGET_ZOS && regnum >= 16 && regnum <= (16 + FP_ARG_NUM_REG))
     set_mem_alias_set (addr, get_varargs_alias_set ());
@@ -11090,13 +11126,14 @@ save_fpr (rtx base, int offset, int regnum)
 }
 
 /* Emit insn to restore fpr REGNUM from offset OFFSET relative
-   to register BASE.  Return generated insn.  */
+   to register BASE, potentially using TEMP as a temporary.
+   Return generated insn.  */
 
 static rtx
-restore_fpr (rtx base, int offset, int regnum)
+restore_fpr (rtx base, int offset, int regnum, rtx temp)
 {
-  rtx addr;
-  addr = gen_rtx_MEM (DFmode, plus_constant (Pmode, base, offset));
+  rtx addr = base_plus_off_to_mem (base, offset, temp);
+
   set_mem_alias_set (addr, get_frame_alias_set ());
 
   return emit_move_insn (gen_rtx_REG (DFmode, regnum), addr);
@@ -11791,8 +11828,9 @@ s390_emit_f4sa_prologue (void)
   rtx_insn *extra_saves_insns = NULL;
   HOST_WIDE_INT next_nab_offset;
   HOST_WIDE_INT fprs_offset;
-  int first = cfun_frame_layout.first_save_gpr;
   int i;
+  int first = cfun_frame_layout.first_save_gpr;
+  rtx r15 = gen_rtx_REG (Pmode, 15);
 
   /* Save gprs to fprs when possible.  */
   s390_save_gprs_to_fprs ();
@@ -11815,9 +11853,8 @@ s390_emit_f4sa_prologue (void)
     for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
       if (cfun_fpr_save_p (i))
 	{
-	  rtx save = save_fpr (hard_frame_pointer_rtx,
-			       fprs_offset, i);
-	  RTX_FRAME_RELATED_P (save) = 1;
+	  save_fpr (hard_frame_pointer_rtx, fprs_offset, i, r15);
+	  /* RTX_FRAME_RELATED_P (save) = 1;  */
 	  fprs_offset += 8;
 	}
   // printf ("after fp fprs_offset: %ld\n", fprs_offset);
@@ -11827,7 +11864,11 @@ s390_emit_f4sa_prologue (void)
   extra_saves_insns = get_insns ();
   end_sequence ();
 
-  next_nab_offset = fprs_offset + crtl->outgoing_args_size;
+  next_nab_offset = fprs_offset;
+
+  if (!crtl->is_leaf)
+    next_nab_offset += crtl->outgoing_args_size;
+
   /* Create a new DSA if necessary.
      z/OS TODO: The 'if necessary' part might complicate CFI. Check if
      gcc can figure out what to do.  */
@@ -11858,12 +11899,11 @@ s390_emit_f4sa_prologue (void)
 	 a base reg, so isn't suitable. Any other reg would require at
 	 least one spill, even for leaves.  */
 
-      rtx r15, r0, addr, insn, next_dsa_ptr;
+      rtx r0, addr, insn, next_dsa_ptr;
       rtx increment;
 
       /* r15 <- 136(r13)
 	 Also mark r15 as the new CFA reg.  */
-      r15 = gen_rtx_REG (Pmode, 15);
       next_dsa_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
       addr = gen_rtx_MEM (Pmode, next_dsa_ptr);
 
@@ -11895,7 +11935,7 @@ s390_emit_f4sa_prologue (void)
       if (flag_stack_usage_info)
 	current_function_static_stack_size = next_nab_offset;
 
-      r0 = gen_rtx_REG (Pmode, 0);
+      r0 = gen_rtx_REG (Pmode, GPR0_REGNUM);
       increment = GEN_INT (next_nab_offset);
 
       /* Increment the NAB (our SP).  */
@@ -12052,7 +12092,7 @@ s390_emit_prologue (void)
     {
       if (cfun_fpr_save_p (i))
 	{
-	  save_fpr (stack_pointer_rtx, offset, i);
+	  save_fpr (stack_pointer_rtx, offset, i, NULL_RTX);
 	  if (offset < last_probe_offset)
 	    last_probe_offset = offset;
 	  offset += 8;
@@ -12067,7 +12107,7 @@ s390_emit_prologue (void)
     {
       if (cfun_fpr_save_p (i))
 	{
-	  insn = save_fpr (stack_pointer_rtx, offset, i);
+	  insn = save_fpr (stack_pointer_rtx, offset, i, NULL_RTX);
 	  if (offset < last_probe_offset)
 	    last_probe_offset = offset;
 	  offset += 8;
@@ -12091,7 +12131,7 @@ s390_emit_prologue (void)
       for (i = FPR15_REGNUM; i >= FPR8_REGNUM && offset >= 0; i--)
 	if (cfun_fpr_save_p (i))
 	  {
-	    insn = save_fpr (stack_pointer_rtx, offset, i);
+	    insn = save_fpr (stack_pointer_rtx, offset, i, NULL_RTX);
 	    if (offset < last_probe_offset)
 	      last_probe_offset = offset;
 
@@ -12205,7 +12245,7 @@ s390_emit_prologue (void)
 				      + cfun_frame_layout.f8_offset
 				      + offset);
 
-	    insn = save_fpr (temp_reg, offset, i);
+	    insn = save_fpr (temp_reg, offset, i, NULL_RTX);
 	    offset += 8;
 	    RTX_FRAME_RELATED_P (insn) = 1;
 	    add_reg_note (insn, REG_FRAME_RELATED_EXPR,
@@ -12299,23 +12339,53 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 
   /* Emit restores for fprs.  */
   if (cfun_save_high_fprs_p)
-    for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
-      if (cfun_fpr_save_p (i))
+    {
+      rtx temp;
+      bool retval_in_0 = false;
+
+      /* Choose a temp reg if necessary.  */
+      if (first != -1 && first != 0)
+	temp = gen_rtx_REG (Pmode, first);
+      else
 	{
-	  rtx restore =
-	    restore_fpr (hard_frame_pointer_rtx, fprs_offset, i);
-	  RTX_FRAME_RELATED_P (restore) = 1;
-	  add_reg_note (restore, REG_CFA_RESTORE,
-			gen_rtx_REG (Pmode, i));
-	  fprs_offset += 8;
+	  if (last != -1 && last != 0)
+	    temp = gen_rtx_REG (Pmode, last);
+	  else
+	    {
+	      retval_in_0 = true;
+	      emit_move_insn (gen_rtx_REG (Pmode, 0),
+			      gen_rtx_REG (Pmode, 15));
+	      temp = gen_rtx_REG (Pmode, 15);
+	    }
 	}
+
+      /* Do the restores.  */
+      for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
+	if (cfun_fpr_save_p (i))
+	  {
+	    rtx restore =
+	      restore_fpr (hard_frame_pointer_rtx, fprs_offset, i, temp);
+	    /* RTX_FRAME_RELATED_P (restore) = 1;  */
+	    add_reg_note (restore, REG_CFA_RESTORE,
+			  gen_rtx_REG (Pmode, i));
+	    fprs_offset += 8;
+	  }
+
+      if (retval_in_0)
+	emit_move_insn (gen_rtx_REG (Pmode, 15),
+			gen_rtx_REG (Pmode, 0));
+    }
 
   /* z/OS TODO: Emit restores for vrs.  */
 
   /* Swap to previous DSA if necessary.  */
+  HOST_WIDE_INT frame_size = fprs_offset;
+
+  if (!crtl->is_leaf)
+    frame_size += crtl->outgoing_args_size;
 
   if (!crtl->is_leaf
-      || fprs_offset + crtl->outgoing_args_size > F4SA_DSA_SIZE
+      || frame_size > F4SA_DSA_SIZE
       || cfun->calls_alloca)
     {
       /* r13 <- 128(r13)  */
@@ -12477,7 +12547,7 @@ s390_emit_epilogue (bool sibcall)
 	      if (cfun_fpr_save_p (i))
 		{
 		  restore_fpr (frame_pointer,
-			       offset + next_offset, i);
+			       offset + next_offset, i, NULL_RTX);
 		  cfa_restores
 		    = alloc_reg_note (REG_CFA_RESTORE,
 				      gen_rtx_REG (DFmode, i), cfa_restores);
@@ -12496,7 +12566,7 @@ s390_emit_epilogue (bool sibcall)
 	  if (cfun_fpr_save_p (i))
 	    {
 	      restore_fpr (frame_pointer,
-			   offset + next_offset, i);
+			   offset + next_offset, i, NULL_RTX);
 	      cfa_restores
 		= alloc_reg_note (REG_CFA_RESTORE,
 				  gen_rtx_REG (DFmode, i), cfa_restores);
