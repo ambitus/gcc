@@ -13525,21 +13525,6 @@ s390_build_builtin_va_list (void)
 static void
 s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
 {
-  rtx reg;
-  rtx_insn *seq;
-
-  reg = gen_reg_rtx (Pmode);
-  cfun->machine->zos_varargs_pointer = reg;
-
-  start_sequence ();
-  emit_move_insn (reg, gen_rtx_REG (Pmode, ARG_POINTER_REGNUM)); /* z/OS TODO: change to virtual incoming */
-  seq = get_insns ();
-  end_sequence ();
-
-  push_topmost_sequence ();
-  emit_insn_after (seq, entry_of_function ());
-  pop_topmost_sequence ();
-
   tree f_pos;
   tree pos, t;
 
@@ -13548,7 +13533,10 @@ s390_va_start (tree valist, rtx nextarg ATTRIBUTE_UNUSED)
   valist = build_simple_mem_ref (valist);
   pos = build3 (COMPONENT_REF, TREE_TYPE (f_pos), valist, f_pos, NULL_TREE);
 
-  t = fold_build_pointer_plus_hwi (make_tree(TREE_TYPE(pos), cfun->machine->zos_varargs_pointer), INTVAL (crtl->args.arg_offset_rtx));
+  t = make_tree (TREE_TYPE (pos),
+		 get_hard_reg_initial_val (Pmode, ARG_POINTER_REGNUM));
+
+  t = fold_build_pointer_plus_hwi (t, INTVAL (crtl->args.arg_offset_rtx));
   t = build2 (MODIFY_EXPR, TREE_TYPE (pos), pos, t);
 
   TREE_SIDE_EFFECTS (t) = 1;

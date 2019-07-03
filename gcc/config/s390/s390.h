@@ -1005,9 +1005,6 @@ struct GTY(()) machine_function
 
   enum indirect_branch function_return_mem;
   enum indirect_branch function_return_reg;
-
-  /* Vararg pointer for z/OS. TODO: Does this need to be here?  */
-  rtx zos_varargs_pointer;
 };
 #endif
 
