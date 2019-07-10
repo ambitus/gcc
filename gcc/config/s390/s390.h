@@ -1005,6 +1005,8 @@ struct GTY(()) machine_function
 
   enum indirect_branch function_return_mem;
   enum indirect_branch function_return_reg;
+
+  rtx zos_incoming_args_save;
 };
 #endif
 

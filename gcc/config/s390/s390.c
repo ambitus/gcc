@@ -471,6 +471,9 @@ const char *indirect_branch_table_name[INDIRECT_BRANCH_NUM_OPTIONS] =	\
 /* Check if x is a symbol ref for a weak symbol.  */
 #define WEAK_REF_P(x) (SYMBOL_REF_P (x) && SYMBOL_REF_WEAK (x))
 
+/* Register used to save the incoming arg pointer on z/OS.  */
+#define ARG_SAVE_REGNUM (TARGET_ZOS ? 4 : INVALID_REGNUM)
+
 bool
 s390_return_addr_from_memory ()
 {
@@ -10269,7 +10272,11 @@ s390_register_info ()
 
     }
   else
-    clobbered_regs[STACK_POINTER_REGNUM] |= cfun->calls_alloca;
+    {
+      clobbered_regs[STACK_POINTER_REGNUM] |= cfun->calls_alloca;
+
+      clobbered_regs[ARG_SAVE_REGNUM] |= !crtl->is_leaf;
+    }
 
   set_gpr_save_slots_from_clobbers (clobbered_regs);
 
@@ -10469,6 +10476,9 @@ s390_init_frame_layout (void)
      end of the machine dependent reorg phase.  */
   if (!TARGET_CPU_ZARCH)
     cfun->machine->split_branches_pending_p = true;
+
+  if (TARGET_ZOS)
+    cfun->machine->zos_incoming_args_save = NULL_RTX;
 
   do
     {
@@ -14683,8 +14693,31 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 
   if (TARGET_ZOS)
     {
-      /* On z/OS Load R1 with the arg pointer */
+      /* On z/OS Load R1 with the arg pointer.
+         z/OS TODO: This is wasteful for zero-arg calls.  */
       emit_move_insn (arg_pointer_rtx, virtual_outgoing_args_rtx);
+
+      /* Save the incoming arg pointer register into another reg.
+	 It makes it easier to keep track of the original arglist.
+         Do this once per function.  */
+      if (cfun->machine->zos_incoming_args_save == NULL_RTX)
+	{
+	  rtx_insn *arg_insn;
+	  cfun->machine->zos_incoming_args_save = gen_rtx_REG (Pmode,
+							       ARG_SAVE_REGNUM);
+	  start_sequence ();
+	  arg_insn = emit_move_insn (cfun->machine->zos_incoming_args_save,
+				    virtual_incoming_args_rtx);
+	  arg_insn = get_insns ();
+	  end_sequence ();
+
+	  /* Queue the insns on the entry edge, they will be committed
+	     after everything else is expanded. We can't use entry_of_function()
+	     or emit_insn_at_entry() because we are still in the expansion
+	     stage.  */
+	  insert_insn_on_edge (arg_insn,
+			       single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun)));
+	}
 
       /* Set up NAB pointer */
       rtx reg = gen_rtx_REG (Pmode, HARD_FRAME_POINTER_REGNUM);
@@ -14813,6 +14846,17 @@ s390_emit_call (rtx addr_location, rtx tls_call, rtx result_reg,
 	 have denied sibcalls in this case.  */
       gcc_assert (retaddr_reg != NULL_RTX);
       use_reg (&CALL_INSN_FUNCTION_USAGE (insn), gen_rtx_REG (Pmode, 12));
+    }
+
+  if (TARGET_ZOS)
+    {
+      /* z/OS TODO: This is wasteful for zero-arg calls or if the caller
+	 has already loaded all args from the arg list.  */
+      emit_move_insn (arg_pointer_rtx, cfun->machine->zos_incoming_args_save);
+      emit_use (arg_pointer_rtx);
+
+      /* Prevent any other usages of r1 from being moved before.  */
+      emit_insn (gen_blockage ());
     }
 
   return insn;
@@ -17597,7 +17641,11 @@ s390_case_values_threshold (void)
 }
 
 static rtx
-s390_internal_arg_pointer (void) {
+s390_internal_arg_pointer (void)
+{
+  if (cfun->machine->zos_incoming_args_save != NULL_RTX)
+    return cfun->machine->zos_incoming_args_save;
+
   return copy_to_reg (virtual_incoming_args_rtx);
 }
 
@@ -17640,8 +17688,10 @@ s390_internal_arg_pointer (void) {
 #undef TARGET_DELEGITIMIZE_ADDRESS
 #define TARGET_DELEGITIMIZE_ADDRESS s390_delegitimize_address
 
-#undef TARGET_INTERNAL_ARG_POINTER
-#define TARGET_INTERNAL_ARG_POINTER s390_internal_arg_pointer
+#if TARGET_ZOS == 1
+# undef TARGET_INTERNAL_ARG_POINTER
+# define TARGET_INTERNAL_ARG_POINTER s390_internal_arg_pointer
+#endif
 
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS s390_legitimize_address

@@ -153,10 +153,13 @@
 /* z/OS TODO: We should try allowing r1 to be used for other purposes.
    Also we should DEFINITELY make r14 available, since it will usually
    be saved anyway and should be available for the rest of the
-   function.  */
+   function.
+   z/OS TODO: We needed to make r4 fixed as a stopgap fix for an issue
+   where the compiler is trying to load incoming args from r1 after r1
+   has been clobbered by a call. Find some more permanant solution.  */
 #define FIXED_REGISTERS				\
 { 0, 1, 0, 0, 					\
-  0, 0, 0, 0, 					\
+  1, 0, 0, 0, 					\
   0, 0, 0, 1, 					\
   1, 1, 1, 0,					\
   0, 0, 0, 0, 					\
@@ -172,7 +175,7 @@
 
 #define CALL_USED_REGISTERS			\
 { 1, 1, 0, 0, 					\
-  0, 0, 0, 0, 					\
+  1, 0, 0, 0, 					\
   0, 0, 0, 1, 					\
   1, 1, 1, 1,					\
   1, 1, 1, 1, 					\
