@@ -1062,7 +1062,7 @@ s390_handle_hotpatch_attribute (tree *node, tree name, tree args,
 				int flags ATTRIBUTE_UNUSED, bool *no_add_attrs)
 {
   tree expr;
-  tree expr2;
+  tree expr2 = NULL;  /* Silence warnings.  */
   int err;
 
   if (TREE_CODE (*node) != FUNCTION_DECL)
@@ -12481,7 +12481,6 @@ s390_emit_epilogue (bool sibcall)
   rtx frame_pointer, return_reg, cfa_restores = NULL_RTX;
   int area_bottom, area_top, offset = 0;
   int next_offset;
-  rtvec p;
   int i;
 
   if (TARGET_TPF_PROFILING)
