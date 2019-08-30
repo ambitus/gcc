@@ -13094,9 +13094,6 @@ s390_pass_by_reference (cumulative_args_t ca ATTRIBUTE_UNUSED,
       if (TREE_CODE (type) == COMPLEX_TYPE
 	  || TREE_CODE (type) == VECTOR_TYPE)
 	return true;
-
-      if (FLOAT_TYPE_P (type))
-        return true;
     }
 
   return false;
