@@ -1,3 +1,24 @@
+/* Definitions for Linux for S/390.
+   Copyright (C) 2019 Free Software Foundation, Inc.
+   Contributed by Giancarlo Frix (gfrix@rocketsoftware.com) and
+                  Michael Colavita (mcolavita@rocketsoftware.com).
+
+This file is part of GCC.
+
+GCC is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation; either version 3, or (at your option) any later
+version.
+
+GCC is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+for more details.
+
+You should have received a copy of the GNU General Public License
+along with GCC; see the file COPYING3.  If not see
+<http://www.gnu.org/licenses/>.  */
+
 #undef  SIZE_TYPE
 #define SIZE_TYPE "long unsigned int"
 #undef  PTRDIFF_TYPE
@@ -18,7 +39,7 @@
 
 /* Quick and dirty hack to prevent collect2 from using --eh-frame-hdr
    for right now, because the linker can't recognize it.
-   TODO: Either implement --eh-frame-hdr correctly, or prevent
+   z/OS TODO: Either implement --eh-frame-hdr correctly, or prevent
    HAVE_LD_EH_FRAME_HDR from getting defined.  */
 #undef LINK_EH_SPEC
 
