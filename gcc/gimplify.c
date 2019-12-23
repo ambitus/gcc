@@ -191,6 +191,7 @@ struct gimplify_omp_ctx
   bool target_map_scalars_firstprivate;
   bool target_map_pointers_as_0len_arrays;
   bool target_firstprivatize_array_bases;
+  bool add_safelen1;
 };
 
 static struct gimplify_ctx *gimplify_ctxp;
@@ -1294,12 +1295,17 @@ gimplify_bind_expr (tree *expr_p, gimple_seq *pre_p)
 		  || splay_tree_lookup (ctx->variables,
 					(splay_tree_key) t) == NULL))
 	    {
+	      int flag = GOVD_LOCAL;
 	      if (ctx->region_type == ORT_SIMD
 		  && TREE_ADDRESSABLE (t)
 		  && !TREE_STATIC (t))
-		omp_add_variable (ctx, t, GOVD_PRIVATE | GOVD_SEEN);
-	      else
-		omp_add_variable (ctx, t, GOVD_LOCAL | GOVD_SEEN);
+		{
+		  if (TREE_CODE (DECL_SIZE_UNIT (t)) != INTEGER_CST)
+		    ctx->add_safelen1 = true;
+		  else
+		    flag = GOVD_PRIVATE;
+		}
+	      omp_add_variable (ctx, t, flag | GOVD_SEEN);
 	    }
 
 	  DECL_SEEN_IN_BIND_EXPR_P (t) = 1;
@@ -4650,6 +4656,7 @@ gimplify_compound_literal_expr (tree *expr_p, gimple_seq *pre_p,
      otherwise we'd generate a new temporary, and we can as well just
      use the decl we already have.  */
   else if (!TREE_ADDRESSABLE (decl)
+	   && !TREE_THIS_VOLATILE (decl)
 	   && init
 	   && (fallback & fb_lvalue) == 0
 	   && gimple_test_f (init))
@@ -4773,7 +4780,15 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
       {
 	struct gimplify_init_ctor_preeval_data preeval_data;
 	HOST_WIDE_INT num_ctor_elements, num_nonzero_elements;
+	HOST_WIDE_INT num_unique_nonzero_elements;
 	bool cleared, complete_p, valid_const_initializer;
+	/* Use readonly data for initializers of this or smaller size
+	   regardless of the num_nonzero_elements / num_unique_nonzero_elements
+	   ratio.  */
+	const HOST_WIDE_INT min_unique_size = 64;
+	/* If num_nonzero_elements / num_unique_nonzero_elements ratio
+	   is smaller than this, use readonly data.  */
+	const int unique_nonzero_ratio = 8;
 
 	/* Aggregate types must lower constructors to initialization of
 	   individual elements.  The exception is that a CONSTRUCTOR node
@@ -4790,6 +4805,7 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
 	   can only do so if it known to be a valid constant initializer.  */
 	valid_const_initializer
 	  = categorize_ctor_elements (ctor, &num_nonzero_elements,
+				      &num_unique_nonzero_elements,
 				      &num_ctor_elements, &complete_p);
 
 	/* If a const aggregate variable is being initialized, then it
@@ -4798,7 +4814,15 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
 	    && num_nonzero_elements > 1
 	    && TREE_READONLY (object)
 	    && VAR_P (object)
-	    && (flag_merge_constants >= 2 || !TREE_ADDRESSABLE (object)))
+	    && (flag_merge_constants >= 2 || !TREE_ADDRESSABLE (object))
+	    /* For ctors that have many repeated nonzero elements
+	       represented through RANGE_EXPRs, prefer initializing
+	       those through runtime loops over copies of large amounts
+	       of data from readonly data section.  */
+	    && (num_unique_nonzero_elements
+		> num_nonzero_elements / unique_nonzero_ratio
+		|| ((unsigned HOST_WIDE_INT) int_size_in_bytes (type)
+		    <= (unsigned HOST_WIDE_INT) min_unique_size)))
 	  {
 	    if (notify_temp_creation)
 	      return GS_ERROR;
@@ -4899,6 +4923,13 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
 	       is so large as to make individual moves inefficient.  */
 	    if (size > 0
 		&& num_nonzero_elements > 1
+		/* For ctors that have many repeated nonzero elements
+		   represented through RANGE_EXPRs, prefer initializing
+		   those through runtime loops over copies of large amounts
+		   of data from readonly data section.  */
+		&& (num_unique_nonzero_elements
+		    > num_nonzero_elements / unique_nonzero_ratio
+		    || size <= min_unique_size)
 		&& (size < num_nonzero_elements
 		    || !can_move_by_pieces (size, align)))
 	      {
@@ -4922,7 +4953,7 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
 	   one field to assign, initialize the target from a temporary.  */
 	if (TREE_THIS_VOLATILE (object)
 	    && !TREE_ADDRESSABLE (type)
-	    && num_nonzero_elements > 0
+	    && (num_nonzero_elements > 0 || !cleared)
 	    && vec_safe_length (elts) > 1)
 	  {
 	    tree temp = create_tmp_var (TYPE_MAIN_VARIANT (type));
@@ -6120,6 +6151,19 @@ gimplify_asm_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 	  is_inout = false;
 	}
 
+      /* If we can't make copies, we can only accept memory.  */
+      if (TREE_ADDRESSABLE (TREE_TYPE (TREE_VALUE (link))))
+	{
+	  if (allows_mem)
+	    allows_reg = 0;
+	  else
+	    {
+	      error ("impossible constraint in %<asm%>");
+	      error ("non-memory output %d must stay in memory", i);
+	      return GS_ERROR;
+	    }
+	}
+
       if (!allows_reg && allows_mem)
 	mark_addressable (TREE_VALUE (link));
 
@@ -6360,6 +6404,7 @@ gimplify_asm_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 
       gimple_asm_set_volatile (stmt, ASM_VOLATILE_P (expr) || noutputs == 0);
       gimple_asm_set_input (stmt, ASM_INPUT_P (expr));
+      gimple_asm_set_inline (stmt, ASM_INLINE_P (expr));
 
       gimplify_seq_add_stmt (pre_p, stmt);
     }
@@ -6614,6 +6659,7 @@ gimplify_target_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 	    }
 	  if (asan_poisoned_variables
 	      && DECL_ALIGN (temp) <= MAX_SUPPORTED_STACK_ALIGNMENT
+	      && !TREE_STATIC (temp)
 	      && dbg_cnt (asan_use_after_scope)
 	      && !gimplify_omp_ctxp)
 	    {
@@ -8135,8 +8181,8 @@ gimplify_scan_omp_clauses (tree *list_p, gimple_seq *pre_p,
 			      break;
 			    if (scp)
 			      continue;
-			    gcc_assert (offset == NULL_TREE
-					|| poly_int_tree_p (offset));
+			    gcc_assert (offset2 == NULL_TREE
+					|| poly_int_tree_p (offset2));
 			    tree d1 = OMP_CLAUSE_DECL (*sc);
 			    tree d2 = OMP_CLAUSE_DECL (c);
 			    while (TREE_CODE (d1) == ARRAY_REF)
@@ -8171,7 +8217,7 @@ gimplify_scan_omp_clauses (tree *list_p, gimple_seq *pre_p,
 			      o2 = 0;
 			    o2 += bits_to_bytes_round_down (bitpos2);
 			    if (maybe_lt (o1, o2)
-				|| (known_eq (o1, 2)
+				|| (known_eq (o1, o2)
 				    && maybe_lt (bitpos, bitpos2)))
 			      {
 				if (ptr)
@@ -8986,6 +9032,19 @@ gimplify_adjust_omp_clauses (gimple_seq *pre_p, gimple_seq body, tree *list_p,
 			   omp_find_stores_op, &wi);
 	}
     }
+
+  if (ctx->add_safelen1)
+    {
+      /* If there are VLAs in the body of simd loop, prevent
+	 vectorization.  */
+      gcc_assert (ctx->region_type == ORT_SIMD);
+      c = build_omp_clause (UNKNOWN_LOCATION, OMP_CLAUSE_SAFELEN);
+      OMP_CLAUSE_SAFELEN_EXPR (c) = integer_one_node;
+      OMP_CLAUSE_CHAIN (c) = *list_p;
+      *list_p = c;
+      list_p = &OMP_CLAUSE_CHAIN (c);
+    }
+
   while ((c = *list_p) != NULL)
     {
       splay_tree_node n;
@@ -9734,9 +9793,26 @@ gimplify_omp_for (tree *expr_p, gimple_seq *pre_p)
 	  t = TREE_VEC_ELT (OMP_FOR_INIT (for_stmt), i);
 	  if (!is_gimple_constant (TREE_OPERAND (t, 1)))
 	    {
+	      tree type = TREE_TYPE (TREE_OPERAND (t, 0));
 	      TREE_OPERAND (t, 1)
 		= get_initialized_tmp_var (TREE_OPERAND (t, 1),
-					   pre_p, NULL, false);
+					   gimple_seq_empty_p (for_pre_body)
+					   ? pre_p : &for_pre_body, NULL,
+					   false);
+	      /* Reference to pointer conversion is considered useless,
+		 but is significant for firstprivate clause.  Force it
+		 here.  */
+	      if (TREE_CODE (type) == POINTER_TYPE
+		  && (TREE_CODE (TREE_TYPE (TREE_OPERAND (t, 1)))
+		      == REFERENCE_TYPE))
+		{
+		  tree v = create_tmp_var (TYPE_MAIN_VARIANT (type));
+		  tree m = build2 (INIT_EXPR, TREE_TYPE (v), v,
+				   TREE_OPERAND (t, 1));
+		  gimplify_and_add (m, gimple_seq_empty_p (for_pre_body)
+				       ? pre_p : &for_pre_body);
+		  TREE_OPERAND (t, 1) = v;
+		}
 	      tree c = build_omp_clause (input_location,
 					 OMP_CLAUSE_FIRSTPRIVATE);
 	      OMP_CLAUSE_DECL (c) = TREE_OPERAND (t, 1);
@@ -9748,11 +9824,26 @@ gimplify_omp_for (tree *expr_p, gimple_seq *pre_p)
 	  t = TREE_VEC_ELT (OMP_FOR_COND (for_stmt), i);
 	  if (!is_gimple_constant (TREE_OPERAND (t, 1)))
 	    {
+	      tree type = TREE_TYPE (TREE_OPERAND (t, 0));
 	      TREE_OPERAND (t, 1)
 		= get_initialized_tmp_var (TREE_OPERAND (t, 1),
 					   gimple_seq_empty_p (for_pre_body)
 					   ? pre_p : &for_pre_body, NULL,
 					   false);
+	      /* Reference to pointer conversion is considered useless,
+		 but is significant for firstprivate clause.  Force it
+		 here.  */
+	      if (TREE_CODE (type) == POINTER_TYPE
+		  && (TREE_CODE (TREE_TYPE (TREE_OPERAND (t, 1)))
+		      == REFERENCE_TYPE))
+		{
+		  tree v = create_tmp_var (TYPE_MAIN_VARIANT (type));
+		  tree m = build2 (INIT_EXPR, TREE_TYPE (v), v,
+				   TREE_OPERAND (t, 1));
+		  gimplify_and_add (m, gimple_seq_empty_p (for_pre_body)
+				       ? pre_p : &for_pre_body);
+		  TREE_OPERAND (t, 1) = v;
+		}
 	      tree c = build_omp_clause (input_location,
 					 OMP_CLAUSE_FIRSTPRIVATE);
 	      OMP_CLAUSE_DECL (c) = TREE_OPERAND (t, 1);
@@ -10257,8 +10348,17 @@ gimplify_omp_for (tree *expr_p, gimple_seq *pre_p)
 		  seq = &OMP_CLAUSE_LASTPRIVATE_GIMPLE_SEQ (c);
 		else
 		  seq = &OMP_CLAUSE_LINEAR_GIMPLE_SEQ (c);
+		push_gimplify_context ();
 		gimplify_assign (decl, t, seq);
-	    }
+		gimple *bind = NULL;
+		if (gimplify_ctxp->temps)
+		  {
+		    bind = gimple_build_bind (NULL_TREE, *seq, NULL_TREE);
+		    *seq = NULL;
+		    gimplify_seq_add_stmt (seq, bind);
+		  }
+		pop_gimplify_context (bind);
+	      }
 	}
     }
 
@@ -11000,9 +11100,36 @@ gimplify_omp_atomic (tree *expr_p, gimple_seq *pre_p)
 
   loadstmt = gimple_build_omp_atomic_load (tmp_load, addr);
   gimplify_seq_add_stmt (pre_p, loadstmt);
-  if (rhs && gimplify_expr (&rhs, pre_p, NULL, is_gimple_val, fb_rvalue)
-      != GS_ALL_DONE)
-    return GS_ERROR;
+  if (rhs)
+    {
+      /* BIT_INSERT_EXPR is not valid for non-integral bitfield
+	 representatives.  Use BIT_FIELD_REF on the lhs instead.  */
+      if (TREE_CODE (rhs) == BIT_INSERT_EXPR
+	  && !INTEGRAL_TYPE_P (TREE_TYPE (tmp_load)))
+	{
+	  tree bitpos = TREE_OPERAND (rhs, 2);
+	  tree op1 = TREE_OPERAND (rhs, 1);
+	  tree bitsize;
+	  tree tmp_store = tmp_load;
+	  if (TREE_CODE (*expr_p) == OMP_ATOMIC_CAPTURE_OLD)
+	    tmp_store = get_initialized_tmp_var (tmp_load, pre_p, NULL);
+	  if (INTEGRAL_TYPE_P (TREE_TYPE (op1)))
+	    bitsize = bitsize_int (TYPE_PRECISION (TREE_TYPE (op1)));
+	  else
+	    bitsize = TYPE_SIZE (TREE_TYPE (op1));
+	  gcc_assert (TREE_OPERAND (rhs, 0) == tmp_load);
+	  tree t = build2_loc (EXPR_LOCATION (rhs),
+			       MODIFY_EXPR, void_type_node,
+			       build3_loc (EXPR_LOCATION (rhs), BIT_FIELD_REF,
+					   TREE_TYPE (op1), tmp_store, bitsize,
+					   bitpos), op1);
+	  gimplify_and_add (t, pre_p);
+	  rhs = tmp_store;
+	}
+      if (gimplify_expr (&rhs, pre_p, NULL, is_gimple_val, fb_rvalue)
+	  != GS_ALL_DONE)
+	return GS_ERROR;
+    }
 
   if (TREE_CODE (*expr_p) == OMP_ATOMIC_READ)
     rhs = tmp_load;

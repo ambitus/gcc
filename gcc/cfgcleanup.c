@@ -53,6 +53,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "dce.h"
 #include "dbgcnt.h"
 #include "rtl-iter.h"
+#include "regs.h"
 
 #define FORWARDER_BLOCK_P(BB) ((BB)->flags & BB_FORWARDER_BLOCK)
 
@@ -1217,6 +1218,14 @@ old_insns_match_p (int mode ATTRIBUTE_UNUSED, rtx_insn *i1, rtx_insn *i2)
 		}
 	    }
 	}
+
+      HARD_REG_SET i1_used, i2_used;
+
+      get_call_reg_set_usage (i1, &i1_used, call_used_reg_set);
+      get_call_reg_set_usage (i2, &i2_used, call_used_reg_set);
+
+      if (!hard_reg_set_equal_p (i1_used, i2_used))
+        return dir_none;
     }
 
   /* If both i1 and i2 are frame related, verify all the CFA notes
@@ -1592,10 +1601,13 @@ outgoing_edges_match (int mode, basic_block bb1, basic_block bb2)
   if (crtl->shrink_wrapped
       && single_succ_p (bb1)
       && single_succ (bb1) == EXIT_BLOCK_PTR_FOR_FN (cfun)
-      && !JUMP_P (BB_END (bb1))
+      && (!JUMP_P (BB_END (bb1))
+	  /* Punt if the only successor is a fake edge to exit, the jump
+	     must be some weird one.  */
+	  || (single_succ_edge (bb1)->flags & EDGE_FAKE) != 0)
       && !(CALL_P (BB_END (bb1)) && SIBLING_CALL_P (BB_END (bb1))))
     return false;
-  
+
   /* If BB1 has only one successor, we may be looking at either an
      unconditional jump, or a fake edge to exit.  */
   if (single_succ_p (bb1)
@@ -2702,23 +2714,23 @@ try_optimize_cfg (int mode)
 
 		      if (current_ir_type () == IR_RTL_CFGLAYOUT)
 			{
-			  if (BB_FOOTER (b)
-			      && BARRIER_P (BB_FOOTER (b)))
+			  rtx_insn *insn;
+			  for (insn = BB_FOOTER (b);
+			       insn; insn = NEXT_INSN (insn))
+			    if (BARRIER_P (insn))
+			      break;
+			  if (insn)
 			    FOR_EACH_EDGE (e, ei, b->preds)
-			      if ((e->flags & EDGE_FALLTHRU)
-				  && BB_FOOTER (e->src) == NULL)
+			      if ((e->flags & EDGE_FALLTHRU))
 				{
-				  if (BB_FOOTER (b))
+				  if (BB_FOOTER (b)
+				      && BB_FOOTER (e->src) == NULL)
 				    {
 				      BB_FOOTER (e->src) = BB_FOOTER (b);
 				      BB_FOOTER (b) = NULL;
 				    }
 				  else
-				    {
-				      start_sequence ();
-				      BB_FOOTER (e->src) = emit_barrier ();
-				      end_sequence ();
-				    }
+				    emit_barrier_after_bb (e->src);
 				}
 			}
 		      else

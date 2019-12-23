@@ -2391,14 +2391,22 @@ start_over:
     /* The main loop handles all iterations.  */
     LOOP_VINFO_PEELING_FOR_NITER (loop_vinfo) = false;
   else if (LOOP_VINFO_NITERS_KNOWN_P (loop_vinfo)
-	   && LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo) > 0)
+	   && LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo) >= 0)
     {
-      if (!multiple_p (LOOP_VINFO_INT_NITERS (loop_vinfo)
-		       - LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo),
+      /* Work out the (constant) number of iterations that need to be
+	 peeled for reasons other than niters.  */
+      unsigned int peel_niter = LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo);
+      if (LOOP_VINFO_PEELING_FOR_GAPS (loop_vinfo))
+	peel_niter += 1;
+      if (!multiple_p (LOOP_VINFO_INT_NITERS (loop_vinfo) - peel_niter,
 		       LOOP_VINFO_VECT_FACTOR (loop_vinfo)))
 	LOOP_VINFO_PEELING_FOR_NITER (loop_vinfo) = true;
     }
   else if (LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo)
+	   /* ??? When peeling for gaps but not alignment, we could
+	      try to check whether the (variable) niters is known to be
+	      VF * N + 1.  That's something of a niche case though.  */
+	   || LOOP_VINFO_PEELING_FOR_GAPS (loop_vinfo)
 	   || !LOOP_VINFO_VECT_FACTOR (loop_vinfo).is_constant (&const_vf)
 	   || ((tree_ctz (LOOP_VINFO_NITERS (loop_vinfo))
 		< (unsigned) exact_log2 (const_vf))
@@ -2805,8 +2813,8 @@ vect_is_slp_reduction (loop_vec_info loop_info, gimple *phi,
   struct loop *loop = (gimple_bb (phi))->loop_father;
   struct loop *vect_loop = LOOP_VINFO_LOOP (loop_info);
   enum tree_code code;
-  gimple *current_stmt = NULL, *loop_use_stmt = NULL, *first, *next_stmt;
-  stmt_vec_info use_stmt_info, current_stmt_info;
+  gimple *loop_use_stmt = NULL;
+  stmt_vec_info use_stmt_info;
   tree lhs;
   imm_use_iterator imm_iter;
   use_operand_p use_p;
@@ -2816,6 +2824,7 @@ vect_is_slp_reduction (loop_vec_info loop_info, gimple *phi,
   if (loop != vect_loop)
     return false;
 
+  auto_vec<stmt_vec_info, 8> reduc_chain;
   lhs = PHI_RESULT (phi);
   code = gimple_assign_rhs_code (first_stmt);
   while (1)
@@ -2868,18 +2877,9 @@ vect_is_slp_reduction (loop_vec_info loop_info, gimple *phi,
 
       /* Insert USE_STMT into reduction chain.  */
       use_stmt_info = vinfo_for_stmt (loop_use_stmt);
-      if (current_stmt)
-        {
-          current_stmt_info = vinfo_for_stmt (current_stmt);
-	  GROUP_NEXT_ELEMENT (current_stmt_info) = loop_use_stmt;
-          GROUP_FIRST_ELEMENT (use_stmt_info)
-            = GROUP_FIRST_ELEMENT (current_stmt_info);
-        }
-      else
-	GROUP_FIRST_ELEMENT (use_stmt_info) = loop_use_stmt;
+      reduc_chain.safe_push (use_stmt_info);
 
       lhs = gimple_assign_lhs (loop_use_stmt);
-      current_stmt = loop_use_stmt;
       size++;
    }
 
@@ -2889,9 +2889,9 @@ vect_is_slp_reduction (loop_vec_info loop_info, gimple *phi,
   /* Swap the operands, if needed, to make the reduction operand be the second
      operand.  */
   lhs = PHI_RESULT (phi);
-  next_stmt = GROUP_FIRST_ELEMENT (vinfo_for_stmt (current_stmt));
-  while (next_stmt)
+  for (unsigned i = 0; i < reduc_chain.length (); ++i)
     {
+      gassign *next_stmt = as_a <gassign *> (reduc_chain[i]->stmt);
       if (gimple_assign_rhs2 (next_stmt) == lhs)
 	{
 	  tree op = gimple_assign_rhs1 (next_stmt);
@@ -2916,7 +2916,6 @@ vect_is_slp_reduction (loop_vec_info loop_info, gimple *phi,
                       && !is_loop_header_bb_p (gimple_bb (def_stmt)))))
 	    {
 	      lhs = gimple_assign_lhs (next_stmt);
-	      next_stmt = GROUP_NEXT_ELEMENT (vinfo_for_stmt (next_stmt));
  	      continue;
 	    }
 
@@ -2964,13 +2963,20 @@ vect_is_slp_reduction (loop_vec_info loop_info, gimple *phi,
         }
 
       lhs = gimple_assign_lhs (next_stmt);
-      next_stmt = GROUP_NEXT_ELEMENT (vinfo_for_stmt (next_stmt));
     }
 
+  /* Build up the actual chain.  */
+  for (unsigned i = 0; i < reduc_chain.length () - 1; ++i)
+    {
+      GROUP_FIRST_ELEMENT (reduc_chain[i]) = reduc_chain[0]->stmt;
+      GROUP_NEXT_ELEMENT (reduc_chain[i]) = reduc_chain[i+1]->stmt;
+    }
+  GROUP_FIRST_ELEMENT (reduc_chain.last ()) = reduc_chain[0]->stmt;
+  GROUP_NEXT_ELEMENT (reduc_chain.last ()) = NULL;
+
   /* Save the chain for further analysis in SLP detection.  */
-  first = GROUP_FIRST_ELEMENT (vinfo_for_stmt (current_stmt));
-  LOOP_VINFO_REDUCTION_CHAINS (loop_info).safe_push (first);
-  GROUP_SIZE (vinfo_for_stmt (first)) = size;
+  LOOP_VINFO_REDUCTION_CHAINS (loop_info).safe_push (reduc_chain[0]->stmt);
+  GROUP_SIZE (reduc_chain[0]) = size;
 
   return true;
 }
@@ -4545,14 +4551,9 @@ get_initial_defs_for_reduction (slp_tree slp_node,
   unsigned HOST_WIDE_INT nunits;
   unsigned j, number_of_places_left_in_vector;
   tree vector_type;
-  tree vop;
-  int group_size = stmts.length ();
-  unsigned int vec_num, i;
-  unsigned number_of_copies = 1;
-  vec<tree> voprnds;
-  voprnds.create (number_of_vectors);
+  unsigned int group_size = stmts.length ();
+  unsigned int i;
   struct loop *loop;
-  auto_vec<tree, 16> permute_results;
 
   vector_type = STMT_VINFO_VECTYPE (stmt_vinfo);
 
@@ -4583,119 +4584,79 @@ get_initial_defs_for_reduction (slp_tree slp_node,
   if (!TYPE_VECTOR_SUBPARTS (vector_type).is_constant (&nunits))
     nunits = group_size;
 
-  number_of_copies = nunits * number_of_vectors / group_size;
-
   number_of_places_left_in_vector = nunits;
   bool constant_p = true;
   tree_vector_builder elts (vector_type, nunits, 1);
   elts.quick_grow (nunits);
-  for (j = 0; j < number_of_copies; j++)
+  gimple_seq ctor_seq = NULL;
+  for (j = 0; j < nunits * number_of_vectors; ++j)
     {
-      for (i = group_size - 1; stmts.iterate (i, &stmt); i--)
-        {
-	  tree op;
-	  /* Get the def before the loop.  In reduction chain we have only
-	     one initial value.  */
-	  if ((j != (number_of_copies - 1)
-	       || (reduc_chain && i != 0))
-	      && neutral_op)
-	    op = neutral_op;
-	  else
-	    op = PHI_ARG_DEF_FROM_EDGE (stmt, pe);
+      tree op;
+      i = j % group_size;
+      stmt_vinfo = vinfo_for_stmt (stmts[i]);
 
-          /* Create 'vect_ = {op0,op1,...,opn}'.  */
-          number_of_places_left_in_vector--;
-	  elts[number_of_places_left_in_vector] = op;
-	  if (!CONSTANT_CLASS_P (op))
-	    constant_p = false;
-
-          if (number_of_places_left_in_vector == 0)
-            {
-	      gimple_seq ctor_seq = NULL;
-	      tree init;
-	      if (constant_p && !neutral_op
-		  ? multiple_p (TYPE_VECTOR_SUBPARTS (vector_type), nunits)
-		  : known_eq (TYPE_VECTOR_SUBPARTS (vector_type), nunits))
-		/* Build the vector directly from ELTS.  */
-		init = gimple_build_vector (&ctor_seq, &elts);
-	      else if (neutral_op)
-		{
-		  /* Build a vector of the neutral value and shift the
-		     other elements into place.  */
-		  init = gimple_build_vector_from_val (&ctor_seq, vector_type,
-						       neutral_op);
-		  int k = nunits;
-		  while (k > 0 && elts[k - 1] == neutral_op)
-		    k -= 1;
-		  while (k > 0)
-		    {
-		      k -= 1;
-		      gcall *call = gimple_build_call_internal
-			(IFN_VEC_SHL_INSERT, 2, init, elts[k]);
-		      init = make_ssa_name (vector_type);
-		      gimple_call_set_lhs (call, init);
-		      gimple_seq_add_stmt (&ctor_seq, call);
-		    }
-		}
-	      else
-		{
-		  /* First time round, duplicate ELTS to fill the
-		     required number of vectors, then cherry pick the
-		     appropriate result for each iteration.  */
-		  if (vec_oprnds->is_empty ())
-		    duplicate_and_interleave (&ctor_seq, vector_type, elts,
-					      number_of_vectors,
-					      permute_results);
-		  init = permute_results[number_of_vectors - j - 1];
-		}
-	      if (ctor_seq != NULL)
-		gsi_insert_seq_on_edge_immediate (pe, ctor_seq);
-	      voprnds.quick_push (init);
-
-              number_of_places_left_in_vector = nunits;
-	      elts.new_vector (vector_type, nunits, 1);
-	      elts.quick_grow (nunits);
-	      constant_p = true;
-            }
-        }
-    }
-
-  /* Since the vectors are created in the reverse order, we should invert
-     them.  */
-  vec_num = voprnds.length ();
-  for (j = vec_num; j != 0; j--)
-    {
-      vop = voprnds[j - 1];
-      vec_oprnds->quick_push (vop);
-    }
-
-  voprnds.release ();
-
-  /* In case that VF is greater than the unrolling factor needed for the SLP
-     group of stmts, NUMBER_OF_VECTORS to be created is greater than
-     NUMBER_OF_SCALARS/NUNITS or NUNITS/NUMBER_OF_SCALARS, and hence we have
-     to replicate the vectors.  */
-  tree neutral_vec = NULL;
-  while (number_of_vectors > vec_oprnds->length ())
-    {
-      if (neutral_op)
-        {
-          if (!neutral_vec)
-	    {
-	      gimple_seq ctor_seq = NULL;
-	      neutral_vec = gimple_build_vector_from_val
-		(&ctor_seq, vector_type, neutral_op);
-	      if (ctor_seq != NULL)
-		gsi_insert_seq_on_edge_immediate (pe, ctor_seq);
-	    }
-          vec_oprnds->quick_push (neutral_vec);
-        }
+      /* Get the def before the loop.  In reduction chain we have only
+	 one initial value.  Else we have as many as PHIs in the group.  */
+      if (reduc_chain)
+	op = j != 0 ? neutral_op : PHI_ARG_DEF_FROM_EDGE (stmt_vinfo->stmt, pe);
+      else if (((vec_oprnds->length () + 1) * nunits
+		- number_of_places_left_in_vector >= group_size)
+	       && neutral_op)
+	op = neutral_op;
       else
-        {
-          for (i = 0; vec_oprnds->iterate (i, &vop) && i < vec_num; i++)
-            vec_oprnds->quick_push (vop);
-        }
+	op = PHI_ARG_DEF_FROM_EDGE (stmt_vinfo->stmt, pe);
+
+      /* Create 'vect_ = {op0,op1,...,opn}'.  */
+      number_of_places_left_in_vector--;
+      elts[nunits - number_of_places_left_in_vector - 1] = op;
+      if (!CONSTANT_CLASS_P (op))
+	constant_p = false;
+
+      if (number_of_places_left_in_vector == 0)
+	{
+	  tree init;
+	  if (constant_p && !neutral_op
+	      ? multiple_p (TYPE_VECTOR_SUBPARTS (vector_type), nunits)
+	      : known_eq (TYPE_VECTOR_SUBPARTS (vector_type), nunits))
+	    /* Build the vector directly from ELTS.  */
+	    init = gimple_build_vector (&ctor_seq, &elts);
+	  else if (neutral_op)
+	    {
+	      /* Build a vector of the neutral value and shift the
+		 other elements into place.  */
+	      init = gimple_build_vector_from_val (&ctor_seq, vector_type,
+						   neutral_op);
+	      int k = nunits;
+	      while (k > 0 && elts[k - 1] == neutral_op)
+		k -= 1;
+	      while (k > 0)
+		{
+		  k -= 1;
+		  gcall *call = gimple_build_call_internal
+		      (IFN_VEC_SHL_INSERT, 2, init, elts[k]);
+		  init = make_ssa_name (vector_type);
+		  gimple_call_set_lhs (call, init);
+		  gimple_seq_add_stmt (&ctor_seq, call);
+		}
+	    }
+	  else
+	    {
+	      /* First time round, duplicate ELTS to fill the
+		 required number of vectors.  */
+	      duplicate_and_interleave (&ctor_seq, vector_type, elts,
+					number_of_vectors, *vec_oprnds);
+	      break;
+	    }
+	  vec_oprnds->quick_push (init);
+
+	  number_of_places_left_in_vector = nunits;
+	  elts.new_vector (vector_type, nunits, 1);
+	  elts.quick_grow (nunits);
+	  constant_p = true;
+	}
     }
+  if (ctor_seq != NULL)
+    gsi_insert_seq_on_edge_immediate (pe, ctor_seq);
 }
 
 
@@ -5558,6 +5519,9 @@ vect_create_epilog_for_reduction (vec<tree> vect_defs, gimple *stmt,
 	  if (STMT_VINFO_VEC_REDUCTION_TYPE (stmt_info)
 	      == INTEGER_INDUC_COND_REDUCTION)
 	    code = induc_code;
+	  else if (STMT_VINFO_VEC_REDUCTION_TYPE (stmt_info)
+		   == CONST_COND_REDUCTION)
+	    code = STMT_VINFO_VEC_CONST_COND_REDUC_CODE (stmt_info);
 	  else
 	    code = MAX_EXPR;
 	}
@@ -6312,7 +6276,7 @@ vectorize_fold_left_reduction (gimple *stmt, gimple_stmt_iterator *gsi,
 	  /* Remove the statement, so that we can use the same code paths
 	     as for statements that we've just created.  */
 	  gimple_stmt_iterator tmp_gsi = gsi_for_stmt (new_stmt);
-	  gsi_remove (&tmp_gsi, false);
+	  gsi_remove (&tmp_gsi, true);
 	}
 
       if (i == vec_num - 1)
@@ -6844,10 +6808,13 @@ vectorizable_reduction (gimple *stmt, gimple_stmt_iterator *gsi,
 	  gcc_assert (TREE_CODE (base) == INTEGER_CST
 		      && TREE_CODE (step) == INTEGER_CST);
 	  cond_reduc_val = NULL_TREE;
+	  tree res = PHI_RESULT (STMT_VINFO_STMT (cond_stmt_vinfo));
+	  if (!types_compatible_p (TREE_TYPE (res), TREE_TYPE (base)))
+	    ;
 	  /* Find a suitable value, for MAX_EXPR below base, for MIN_EXPR
 	     above base; punt if base is the minimum value of the type for
 	     MAX_EXPR or maximum value of the type for MIN_EXPR for now.  */
-	  if (tree_int_cst_sgn (step) == -1)
+	  else if (tree_int_cst_sgn (step) == -1)
 	    {
 	      cond_reduc_op_code = MIN_EXPR;
 	      if (tree_int_cst_sgn (base) == -1)

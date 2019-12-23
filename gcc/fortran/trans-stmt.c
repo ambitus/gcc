@@ -1842,7 +1842,8 @@ trans_associate_var (gfc_symbol *sym, gfc_wrapped_block *block)
 	    {
 	      if (e->symtree
 		  && DECL_LANG_SPECIFIC (e->symtree->n.sym->backend_decl)
-		 && GFC_DECL_SAVED_DESCRIPTOR (e->symtree->n.sym->backend_decl))
+		  && GFC_DECL_SAVED_DESCRIPTOR (e->symtree->n.sym->backend_decl)
+		  && TREE_CODE (target_expr) != COMPONENT_REF)
 		/* Use the original class descriptor stored in the saved
 		   descriptor to get the target_expr.  */
 		target_expr =
@@ -1887,7 +1888,6 @@ trans_associate_var (gfc_symbol *sym, gfc_wrapped_block *block)
 	}
 
       if (sym->ts.type == BT_CHARACTER
-	  && sym->ts.deferred
 	  && !sym->attr.select_type_temporary
 	  && VAR_P (sym->ts.u.cl->backend_decl)
 	  && se.string_length != sym->ts.u.cl->backend_decl)
@@ -6607,7 +6607,7 @@ gfc_trans_allocate (gfc_code * code)
 	  /* Use class_init_assign to initialize expr.  */
 	  gfc_code *ini;
 	  ini = gfc_get_code (EXEC_INIT_ASSIGN);
-	  ini->expr1 = gfc_find_and_cut_at_last_class_ref (expr);
+	  ini->expr1 = gfc_find_and_cut_at_last_class_ref (expr, true);
 	  tmp = gfc_trans_class_init_assign (ini);
 	  gfc_free_statements (ini);
 	  gfc_add_expr_to_block (&block, tmp);

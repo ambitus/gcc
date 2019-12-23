@@ -69,6 +69,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-cfgcleanup.h"
 #include "tree-ssa-loop.h"
 #include "tree-scalar-evolution.h"
+#include "builtins.h"
 #include "tree-ssa-sccvn.h"
 
 /* This algorithm is based on the SCC algorithm presented by Keith
@@ -1650,7 +1651,6 @@ vn_reference_lookup_or_insert_for_pieces (tree vuse,
 }
 
 static vn_nary_op_t vn_nary_op_insert_stmt (gimple *stmt, tree result);
-static unsigned mprts_hook_cnt;
 
 /* Hook for maybe_push_res_to_seq, lookup the expression in the VN tables.  */
 
@@ -1672,22 +1672,8 @@ vn_lookup_simplify_result (code_helper rcode, tree type, tree *ops_)
 	ops[i] = CONSTRUCTOR_ELT (ops_[0], i)->value;
     }
   vn_nary_op_t vnresult = NULL;
-  tree res = vn_nary_op_lookup_pieces (length, (tree_code) rcode,
-				       type, ops, &vnresult);
-  /* We can end up endlessly recursing simplifications if the lookup above
-     presents us with a def-use chain that mirrors the original simplification.
-     See PR80887 for an example.  Limit successful lookup artificially
-     to 10 times if we are called as mprts_hook.  */
-  if (res
-      && mprts_hook
-      && --mprts_hook_cnt == 0)
-    {
-      if (dump_file && (dump_flags & TDF_DETAILS))
-	fprintf (dump_file, "Resetting mprts_hook after too many "
-		 "invocations.\n");
-      mprts_hook = NULL;
-    }
-  return res;
+  return vn_nary_op_lookup_pieces (length, (tree_code) rcode,
+				   type, ops, &vnresult);
 }
 
 /* Return a value-number for RCODE OPS... either by looking up an existing
@@ -1704,7 +1690,6 @@ vn_nary_build_or_lookup_1 (code_helper rcode, tree type, tree *ops,
      So first simplify and lookup this expression to see if it
      is already available.  */
   mprts_hook = vn_lookup_simplify_result;
-  mprts_hook_cnt = 9;
   bool res = false;
   switch (TREE_CODE_LENGTH ((tree_code) rcode))
     {
@@ -1873,14 +1858,11 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *vr_,
       /* If we reach a clobbering statement try to skip it and see if
          we find a VN result with exactly the same value as the
 	 possible clobber.  In this case we can ignore the clobber
-	 and return the found value.
-	 Note that we don't need to worry about partial overlapping
-	 accesses as we then can use TBAA to disambiguate against the
-	 clobbering statement when looking up a load (thus the
-	 VN_WALKREWRITE guard).  */
+	 and return the found value.  */
       if (vn_walk_kind == VN_WALKREWRITE
 	  && is_gimple_reg_type (TREE_TYPE (lhs))
-	  && types_compatible_p (TREE_TYPE (lhs), vr->type))
+	  && types_compatible_p (TREE_TYPE (lhs), vr->type)
+	  && ref->ref)
 	{
 	  tree *saved_last_vuse_ptr = last_vuse_ptr;
 	  /* Do not update last_vuse_ptr in vn_reference_lookup_2.  */
@@ -1898,7 +1880,14 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *vr_,
 	      vn_reference_t vnresult = (vn_reference_t) res;
 	      if (vnresult->result
 		  && operand_equal_p (vnresult->result,
-				      gimple_assign_rhs1 (def_stmt), 0))
+				      gimple_assign_rhs1 (def_stmt), 0)
+		  /* We have to honor our promise about union type punning
+		     and also support arbitrary overlaps with
+		     -fno-strict-aliasing.  So simply resort to alignment to
+		     rule out overlaps.  Do this check last because it is
+		     quite expensive compared to the hash-lookup above.  */
+		  && multiple_p (get_object_alignment (ref->ref), ref->size)
+		  && multiple_p (get_object_alignment (lhs), ref->size))
 		return res;
 	    }
 	}
@@ -1992,6 +1981,7 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *vr_,
       base2 = get_ref_base_and_extent (gimple_assign_lhs (def_stmt),
 				       &offset2, &size2, &maxsize2, &reverse);
       if (known_size_p (maxsize2)
+	  && known_eq (maxsize2, size2)
 	  && operand_equal_p (base, base2, 0)
 	  && known_subrange_p (offset, maxsize, offset2, size2))
 	{
@@ -2037,9 +2027,20 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *vr_,
 	  tree rhs = gimple_assign_rhs1 (def_stmt);
 	  if (TREE_CODE (rhs) == SSA_NAME)
 	    rhs = SSA_VAL (rhs);
-	  len = native_encode_expr (gimple_assign_rhs1 (def_stmt),
+	  unsigned pad = 0;
+	  if (BYTES_BIG_ENDIAN
+	      && is_a <scalar_mode> (TYPE_MODE (TREE_TYPE (rhs))))
+	    {
+	      /* On big-endian the padding is at the 'front' so
+		 just skip the initial bytes.  */
+	      fixed_size_mode mode
+		  = as_a <fixed_size_mode> (TYPE_MODE (TREE_TYPE (rhs)));
+	      pad = GET_MODE_SIZE (mode) - size2 / BITS_PER_UNIT;
+	    }
+	  len = native_encode_expr (rhs,
 				    buffer, sizeof (buffer),
-				    (offseti - offset2) / BITS_PER_UNIT);
+				    ((offseti - offset2) / BITS_PER_UNIT
+				     + pad));
 	  if (len > 0 && len * BITS_PER_UNIT >= maxsizei)
 	    {
 	      tree type = vr->type;
@@ -2085,6 +2086,7 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *vr_,
       base2 = get_ref_base_and_extent (gimple_assign_lhs (def_stmt),
 				       &offset2, &size2, &maxsize2,
 				       &reverse);
+      tree def_rhs = gimple_assign_rhs1 (def_stmt);
       if (!reverse
 	  && known_size_p (maxsize2)
 	  && known_eq (maxsize2, size2)
@@ -2096,11 +2098,13 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *vr_,
 	     according to endianness.  */
 	  && (! INTEGRAL_TYPE_P (vr->type)
 	      || known_eq (ref->size, TYPE_PRECISION (vr->type)))
-	  && multiple_p (ref->size, BITS_PER_UNIT))
+	  && multiple_p (ref->size, BITS_PER_UNIT)
+	  && (! INTEGRAL_TYPE_P (TREE_TYPE (def_rhs))
+	      || type_has_mode_precision_p (TREE_TYPE (def_rhs))))
 	{
 	  code_helper rcode = BIT_FIELD_REF;
 	  tree ops[3];
-	  ops[0] = SSA_VAL (gimple_assign_rhs1 (def_stmt));
+	  ops[0] = SSA_VAL (def_rhs);
 	  ops[1] = bitsize_int (ref->size);
 	  ops[2] = bitsize_int (offset - offset2);
 	  tree val = vn_nary_build_or_lookup (rcode, vr->type, ops);
@@ -3622,7 +3626,17 @@ visit_nary_op (tree lhs, gassign *stmt)
 		  ops[0] = vn_nary_op_lookup_pieces
 		      (2, gimple_assign_rhs_code (def), type, ops, NULL);
 		  /* We have wider operation available.  */
-		  if (ops[0])
+		  if (ops[0]
+		      /* If the leader is a wrapping operation we can
+			 insert it for code hoisting w/o introducing
+			 undefined overflow.  If it is not it has to
+			 be available.  See PR86554.  */
+		      && (TYPE_OVERFLOW_WRAPS (TREE_TYPE (ops[0]))
+			  || TREE_CODE (ops[0]) != SSA_NAME
+			  || SSA_NAME_IS_DEFAULT_DEF (ops[0])
+			  || dominated_by_p_w_unex
+			       (gimple_bb (stmt),
+				gimple_bb (SSA_NAME_DEF_STMT (ops[0])))))
 		    {
 		      unsigned lhs_prec = TYPE_PRECISION (type);
 		      unsigned rhs_prec = TYPE_PRECISION (TREE_TYPE (rhs1));
@@ -3979,7 +3993,6 @@ try_to_simplify (gassign *stmt)
 
   /* First try constant folding based on our current lattice.  */
   mprts_hook = vn_lookup_simplify_result;
-  mprts_hook_cnt = 9;
   tem = gimple_fold_stmt_to_constant_1 (stmt, vn_valueize, vn_valueize);
   mprts_hook = NULL;
   if (tem
@@ -5200,6 +5213,57 @@ public:
   auto_vec<tree> avail;
   auto_vec<tree> avail_stack;
 };
+
+/* Return true if the reference operation REF may trap.  */
+
+bool
+vn_reference_may_trap (vn_reference_t ref)
+{
+  switch (ref->operands[0].opcode)
+    {
+    case MODIFY_EXPR:
+    case CALL_EXPR:
+      /* We do not handle calls.  */
+    case ADDR_EXPR:
+      /* And toplevel address computations never trap.  */
+      return false;
+    default:;
+    }
+
+  vn_reference_op_t op;
+  unsigned i;
+  FOR_EACH_VEC_ELT (ref->operands, i, op)
+    {
+      switch (op->opcode)
+	{
+	case WITH_SIZE_EXPR:
+	case TARGET_MEM_REF:
+	  /* Always variable.  */
+	  return true;
+	case COMPONENT_REF:
+	  if (op->op1 && TREE_CODE (op->op1) == SSA_NAME)
+	    return true;
+	  break;
+	case ARRAY_RANGE_REF:
+	case ARRAY_REF:
+	  if (TREE_CODE (op->op0) == SSA_NAME)
+	    return true;
+	  break;
+	case MEM_REF:
+	  /* Nothing interesting in itself, the base is separate.  */
+	  break;
+	/* The following are the address bases.  */
+	case SSA_NAME:
+	  return true;
+	case ADDR_EXPR:
+	  if (op->op0)
+	    return tree_could_trap_p (TREE_OPERAND (op->op0, 0));
+	  return false;
+	default:;
+	}
+    }
+  return false;
+}
 
 eliminate_dom_walker::eliminate_dom_walker (cdi_direction direction,
 					    bitmap inserted_exprs_)

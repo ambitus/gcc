@@ -748,6 +748,13 @@ extern enum cmodel sparc_cmodel;
    register window instruction in the prologue.  */
 #define HARD_REGNO_RENAME_OK(FROM, TO) ((FROM) != 1)
 
+/* Select a register mode required for caller save of hard regno REGNO.
+   Contrary to what is documented, the default is not the smallest suitable
+   mode but the largest suitable mode for the given (REGNO, NREGS) pair and
+   it quickly creates paradoxical subregs that can be problematic.  */
+#define HARD_REGNO_CALLER_SAVE_MODE(REGNO, NREGS, MODE) \
+  ((MODE) == VOIDmode ? choose_hard_reg_mode (REGNO, NREGS, false) : (MODE))
+
 /* Specify the registers used for certain standard purposes.
    The values of these macros are register numbers.  */
 
@@ -805,7 +812,6 @@ extern enum cmodel sparc_cmodel;
 #define STATIC_CHAIN_REGNUM (TARGET_ARCH64 ? 5 : 2)
 
 /* Register which holds the global offset table, if any.  */
-
 #define GLOBAL_OFFSET_TABLE_REGNUM 23
 
 /* Register which holds offset table for position-independent data references.
@@ -813,7 +819,6 @@ extern enum cmodel sparc_cmodel;
    so we use a pseudo-register to make sure it is properly saved and restored
    around calls to setjmp.  Now the ABI of VxWorks RTP makes it live on entry
    to PLT entries so we use the canonical GOT register in this case.  */
-
 #define PIC_OFFSET_TABLE_REGNUM \
   (TARGET_VXWORKS_RTP && flag_pic ? GLOBAL_OFFSET_TABLE_REGNUM : INVALID_REGNUM)
 
@@ -823,7 +828,6 @@ extern enum cmodel sparc_cmodel;
    Originally it was -1, but later on the container of options changed to
    unsigned byte, so we decided to pick 127 as default value, which does
    reflect an undefined default value in case of 0/1.  */
-
 #define DEFAULT_PCC_STRUCT_RETURN 127
 
 /* Functions which return large structures get the address

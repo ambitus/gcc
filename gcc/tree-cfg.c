@@ -2307,7 +2307,7 @@ remove_bb (basic_block bb)
 		  new_bb = single_succ (new_bb);
 		  gcc_assert (new_bb != bb);
 		}
-	      new_gsi = gsi_start_bb (new_bb);
+	      new_gsi = gsi_after_labels (new_bb);
 	      gsi_remove (&i, false);
 	      gsi_insert_before (&new_gsi, stmt, GSI_NEW_STMT);
 	    }
@@ -6308,7 +6308,7 @@ gimple_can_duplicate_bb_p (const_basic_block bb ATTRIBUTE_UNUSED)
    preserve SSA form.  */
 
 static basic_block
-gimple_duplicate_bb (basic_block bb)
+gimple_duplicate_bb (basic_block bb, copy_bb_data *id)
 {
   basic_block new_bb;
   gimple_stmt_iterator gsi_tgt;
@@ -6372,6 +6372,39 @@ gimple_duplicate_bb (basic_block bb)
 	      && (!VAR_P (base) || !DECL_HAS_VALUE_EXPR_P (base)))
 	    DECL_NONSHAREABLE (base) = 1;
 	}
+ 
+      /* If requested remap dependence info of cliques brought in
+         via inlining.  */
+      if (id)
+	for (unsigned i = 0; i < gimple_num_ops (copy); ++i)
+	  {
+	    tree op = gimple_op (copy, i);
+	    if (!op)
+	      continue;
+	    if (TREE_CODE (op) == ADDR_EXPR
+		|| TREE_CODE (op) == WITH_SIZE_EXPR)
+	      op = TREE_OPERAND (op, 0);
+	    while (handled_component_p (op))
+	      op = TREE_OPERAND (op, 0);
+	    if ((TREE_CODE (op) == MEM_REF
+		 || TREE_CODE (op) == TARGET_MEM_REF)
+		&& MR_DEPENDENCE_CLIQUE (op) > 1
+		&& MR_DEPENDENCE_CLIQUE (op) != bb->loop_father->owned_clique)
+	      {
+		if (!id->dependence_map)
+		  id->dependence_map = new hash_map<dependence_hash,
+						    unsigned short>;
+		bool existed;
+		unsigned short &newc = id->dependence_map->get_or_insert
+		    (MR_DEPENDENCE_CLIQUE (op), &existed);
+		if (!existed)
+		  {
+		    gcc_assert (MR_DEPENDENCE_CLIQUE (op) <= cfun->last_clique);
+		    newc = ++cfun->last_clique;
+		  }
+		MR_DEPENDENCE_CLIQUE (op) = newc;
+	      }
+	  }
 
       /* Create new names for all the definitions created by COPY and
 	 add replacement mappings for each new name.  */
@@ -7199,7 +7232,14 @@ move_block_to_fn (struct function *dest_cfun, basic_block bb,
       if (virtual_operand_p (op))
 	{
 	  /* Remove the phi nodes for virtual operands (alias analysis will be
-	     run for the new function, anyway).  */
+	     run for the new function, anyway).  But replace all uses that
+	     might be outside of the region we move.  */
+	  use_operand_p use_p;
+	  imm_use_iterator iter;
+	  gimple *use_stmt;
+	  FOR_EACH_IMM_USE_STMT (use_stmt, iter, op)
+	    FOR_EACH_IMM_USE_ON_STMT (use_p, iter)
+	      SET_USE (use_p, SSA_NAME_VAR (op));
           remove_phi_node (&psi, true);
 	  continue;
 	}
@@ -7287,11 +7327,14 @@ move_block_to_fn (struct function *dest_cfun, basic_block bb,
 }
 
 /* Examine the statements in BB (which is in SRC_CFUN); find and return
-   the outermost EH region.  Use REGION as the incoming base EH region.  */
+   the outermost EH region.  Use REGION as the incoming base EH region.
+   If there is no single outermost region, return NULL and set *ALL to
+   true.  */
 
 static eh_region
 find_outermost_region_in_block (struct function *src_cfun,
-				basic_block bb, eh_region region)
+				basic_block bb, eh_region region,
+				bool *all)
 {
   gimple_stmt_iterator si;
 
@@ -7310,7 +7353,11 @@ find_outermost_region_in_block (struct function *src_cfun,
 	  else if (stmt_region != region)
 	    {
 	      region = eh_region_outermost (src_cfun, stmt_region, region);
-	      gcc_assert (region != NULL);
+	      if (region == NULL)
+		{
+		  *all = true;
+		  return NULL;
+		}
 	    }
 	}
     }
@@ -7645,12 +7692,17 @@ move_sese_region_to_fn (struct function *dest_cfun, basic_block entry_bb,
   if (saved_cfun->eh)
     {
       eh_region region = NULL;
+      bool all = false;
 
       FOR_EACH_VEC_ELT (bbs, i, bb)
-	region = find_outermost_region_in_block (saved_cfun, bb, region);
+	{
+	  region = find_outermost_region_in_block (saved_cfun, bb, region, &all);
+	  if (all)
+	    break;
+	}
 
       init_eh_for_function ();
-      if (region != NULL)
+      if (region != NULL || all)
 	{
 	  new_label_map = htab_create (17, tree_map_hash, tree_map_eq, free);
 	  eh_map = duplicate_eh_regions (saved_cfun, region, 0,
@@ -9297,20 +9349,16 @@ generate_range_test (basic_block bb, tree index, tree low, tree high,
   tree type = TREE_TYPE (index);
   tree utype = unsigned_type_for (type);
 
-  low = fold_convert (type, low);
-  high = fold_convert (type, high);
+  low = fold_convert (utype, low);
+  high = fold_convert (utype, high);
 
-  tree tmp = make_ssa_name (type);
-  gassign *sub1
-    = gimple_build_assign (tmp, MINUS_EXPR, index, low);
+  gimple_seq seq = NULL;
+  index = gimple_convert (&seq, utype, index);
+  *lhs = gimple_build (&seq, MINUS_EXPR, utype, index, low);
+  *rhs = const_binop (MINUS_EXPR, utype, high, low);
 
-  *lhs = make_ssa_name (utype);
-  gassign *a = gimple_build_assign (*lhs, NOP_EXPR, tmp);
-
-  *rhs = fold_build2 (MINUS_EXPR, utype, high, low);
   gimple_stmt_iterator gsi = gsi_last_bb (bb);
-  gsi_insert_before (&gsi, sub1, GSI_SAME_STMT);
-  gsi_insert_before (&gsi, a, GSI_SAME_STMT);
+  gsi_insert_seq_before (&gsi, seq, GSI_SAME_STMT);
 }
 
 /* Emit return warnings.  */

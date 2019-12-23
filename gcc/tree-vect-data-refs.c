@@ -144,6 +144,30 @@ vect_get_smallest_scalar_type (gimple *stmt, HOST_WIDE_INT *lhs_size_unit,
       if (rhs < lhs)
         scalar_type = rhs_type;
     }
+  else if (gcall *call = dyn_cast <gcall *> (stmt))
+    {
+      unsigned int i = 0;
+      if (gimple_call_internal_p (call))
+	{
+	  internal_fn ifn = gimple_call_internal_fn (call);
+	  if (internal_load_fn_p (ifn) || internal_store_fn_p (ifn))
+	    /* gimple_expr_type already picked the type of the loaded
+	       or stored data.  */
+	    i = ~0U;
+	  else if (internal_fn_mask_index (ifn) == 0)
+	    i = 1;
+	}
+      if (i < gimple_call_num_args (call))
+	{
+	  tree rhs_type = TREE_TYPE (gimple_call_arg (call, i));
+	  if (tree_fits_uhwi_p (TYPE_SIZE_UNIT (rhs_type)))
+	    {
+	      rhs = TREE_INT_CST_LOW (TYPE_SIZE_UNIT (rhs_type));
+	      if (rhs < lhs)
+		scalar_type = rhs_type;
+	    }
+	}
+    }
 
   *lhs_size_unit = lhs;
   *rhs_size_unit = rhs;
@@ -206,14 +230,60 @@ vect_preserves_scalar_order_p (gimple *stmt_a, gimple *stmt_b)
     return true;
 
   /* STMT_A and STMT_B belong to overlapping groups.  All loads in a
-     group are emitted at the position of the first scalar load and all
-     stores in a group are emitted at the position of the last scalar store.
-     Thus writes will happen no earlier than their current position
-     (but could happen later) while reads will happen no later than their
-     current position (but could happen earlier).  Reordering is therefore
-     only possible if the first access is a write.  */
-  gimple *earlier_stmt = get_earlier_stmt (stmt_a, stmt_b);
-  return !DR_IS_WRITE (STMT_VINFO_DATA_REF (vinfo_for_stmt (earlier_stmt)));
+     SLP group are emitted at the position of the last scalar load and
+     all loads in an interleaving group are emitted at the position
+     of the first scalar load.
+     Stores in a group are emitted at the position of the last scalar store.
+     Compute that position and check whether the resulting order matches
+     the current one.
+     We have not yet decided between SLP and interleaving so we have
+     to conservatively assume both.  */
+  gimple *il_a;
+  gimple *last_a = il_a = GROUP_FIRST_ELEMENT (stmtinfo_a);
+  if (last_a)
+    {
+      for (gimple *s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (last_a)); s;
+	   s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (s)))
+	last_a = get_later_stmt (last_a, s);
+      if (!DR_IS_WRITE (STMT_VINFO_DATA_REF (stmtinfo_a)))
+	{
+	  for (gimple *s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (il_a)); s;
+	       s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (s)))
+	    if (get_later_stmt (il_a, s) == il_a)
+	      il_a = s;
+	}
+      else
+	il_a = last_a;
+    }
+  else
+    last_a = il_a = stmt_a;
+  gimple *il_b;
+  gimple *last_b = il_b = GROUP_FIRST_ELEMENT (stmtinfo_b);
+  if (last_b)
+    {
+      for (gimple *s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (last_b)); s;
+	   s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (s)))
+	last_b = get_later_stmt (last_b, s);
+      if (!DR_IS_WRITE (STMT_VINFO_DATA_REF (stmtinfo_b)))
+	{
+	  for (gimple *s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (il_b)); s;
+	       s = GROUP_NEXT_ELEMENT (vinfo_for_stmt (s)))
+	    if (get_later_stmt (il_b, s) == il_b)
+	      il_b = s;
+	}
+      else
+	il_b = last_b;
+    }
+  else
+    last_b = il_b = stmt_b;
+  bool a_after_b = (get_later_stmt (stmt_a, stmt_b) == stmt_a);
+  return (/* SLP */
+	  (get_later_stmt (last_a, last_b) == last_a) == a_after_b
+	  /* Interleaving */
+	  && (get_later_stmt (il_a, il_b) == il_a) == a_after_b
+	  /* Mixed */
+	  && (get_later_stmt (il_a, last_b) == il_a) == a_after_b
+	  && (get_later_stmt (last_a, il_b) == last_a) == a_after_b);
 }
 
 /* A subroutine of vect_analyze_data_ref_dependence.  Handle
@@ -492,8 +562,19 @@ vect_analyze_data_ref_dependence (struct data_dependence_relation *ddr,
 	     reversed (to make distance vector positive), and the actual
 	     distance is negative.  */
 	  if (dump_enabled_p ())
-	    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+	    dump_printf_loc (MSG_NOTE, vect_location,
 	                     "dependence distance negative.\n");
+	  /* When doing outer loop vectorization, we need to check if there is
+	     a backward dependence at the inner loop level if the dependence
+	     at the outer loop is reversed.  See PR81740.  */
+	  if (nested_in_vect_loop_p (loop, DR_STMT (dra))
+	      || nested_in_vect_loop_p (loop, DR_STMT (drb)))
+	    {
+	      unsigned inner_depth = index_in_loop_nest (loop->inner->num,
+							 DDR_LOOP_NEST (ddr));
+	      if (dist_v[inner_depth] < 0)
+		return true;
+	    }
 	  /* Record a negative dependence distance to later limit the
 	     amount of stmt copying / unrolling we can perform.
 	     Only need to handle read-after-write dependence.  */
@@ -509,7 +590,7 @@ vect_analyze_data_ref_dependence (struct data_dependence_relation *ddr,
 	{
 	  /* The dependence distance requires reduction of the maximal
 	     vectorization factor.  */
-	  *max_vf = abs (dist);
+	  *max_vf = abs_dist;
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_NOTE, vect_location,
 	                     "adjusting maximal vectorization factor to %i\n",

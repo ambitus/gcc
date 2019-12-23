@@ -1712,7 +1712,7 @@ is_inv_store_elimination_chain (struct loop *loop, chain_p chain)
 
   gcc_assert (!chain->has_max_use_after);
 
-  /* If loop iterates for unknown times or fewer times than chain->lenght,
+  /* If loop iterates for unknown times or fewer times than chain->length,
      we still need to setup root variable and propagate it with PHI node.  */
   tree niters = number_of_latch_executions (loop);
   if (TREE_CODE (niters) != INTEGER_CST
@@ -2835,7 +2835,7 @@ try_combine_chains (struct loop *loop, vec<chain_p> *chains)
     return;
 
   /* Setup UID for all statements in dominance order.  */
-  basic_block *bbs = get_loop_body (loop);
+  basic_block *bbs = get_loop_body_in_dom_order (loop);
   renumber_gimple_stmt_uids_in_blocks (bbs, loop->num_nodes);
   free (bbs);
 

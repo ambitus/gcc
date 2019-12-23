@@ -106,7 +106,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     template<typename _Tp1, typename _Tp2 = void>
       using _Path = typename
-	std::enable_if<__and_<__not_<is_same<_Tp1, path>>,
+	std::enable_if<__and_<__not_<is_same<remove_cv_t<_Tp1>, path>>,
+			      __not_<is_void<remove_pointer_t<_Tp1>>>,
 			      __constructible_from<_Tp1, _Tp2>>::value,
 		       path>::type;
 
@@ -167,7 +168,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     path(path&& __p) noexcept
     : _M_pathname(std::move(__p._M_pathname)), _M_type(__p._M_type)
     {
-      _M_split_cmpts();
+      if (_M_type == _Type::_Multi)
+	_M_split_cmpts();
       __p.clear();
     }
 
@@ -477,7 +479,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       static basic_string<_CharT, _Traits, _Allocator>
       _S_str_convert(const string_type&, const _Allocator& __a);
 
-    bool _S_is_dir_sep(value_type __ch)
+    static bool _S_is_dir_sep(value_type __ch)
     {
 #ifdef _GLIBCXX_FILESYSTEM_IS_WINDOWS
       return __ch == L'/' || __ch == preferred_separator;
@@ -497,7 +499,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     struct _Cmpt;
     using _List = _GLIBCXX_STD_C::vector<_Cmpt>;
     _List _M_cmpts; // empty unless _M_type == _Type::_Multi
-    _Type _M_type = _Type::_Multi;
+    _Type _M_type = _Type::_Filename;
   };
 
   template<>
@@ -788,6 +790,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline path&
   path::operator=(path&& __p) noexcept
   {
+    if (&__p == this)
+      return *this;
+
     _M_pathname = std::move(__p._M_pathname);
     _M_cmpts = std::move(__p._M_cmpts);
     _M_type = __p._M_type;
@@ -1076,7 +1081,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   {
     if (_M_type == _Type::_Multi)
       return iterator(this, _M_cmpts.begin());
-    return iterator(this, false);
+    return iterator(this, empty());
   }
 
   inline path::iterator

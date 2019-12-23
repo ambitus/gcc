@@ -295,7 +295,10 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
   tree gnu_size = NULL_TREE;
   /* Contains the GCC name to be used for the GCC node.  */
   tree gnu_entity_name;
-  /* True if we have already saved gnu_decl as a GNAT association.  */
+  /* True if we have already saved gnu_decl as a GNAT association.  This can
+     also be used to purposely avoid making such an association but this use
+     case ought not to be applied to types because it can break the deferral
+     mechanism implemented for access types.  */
   bool saved = false;
   /* True if we incremented defer_incomplete_level.  */
   bool this_deferred = false;
@@ -312,14 +315,11 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
 
   /* Since a use of an Itype is a definition, process it as such if it is in
      the main unit, except for E_Access_Subtype because it's actually a use
-     of its base type, and for E_Record_Subtype with cloned subtype because
-     it's actually a use of the cloned subtype, see below.  */
+     of its base type, see below.  */
   if (!definition
       && is_type
       && Is_Itype (gnat_entity)
-      && !(kind == E_Access_Subtype
-	   || (kind == E_Record_Subtype
-	       && Present (Cloned_Subtype (gnat_entity))))
+      && Ekind (gnat_entity) != E_Access_Subtype
       && !present_gnu_tree (gnat_entity)
       && In_Extended_Main_Code_Unit (gnat_entity))
     {
@@ -362,7 +362,7 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
 	}
 
       /* This abort means the Itype has an incorrect scope, i.e. that its
-	 scope does not correspond to the subprogram it is declared in.  */
+	 scope does not correspond to the subprogram it is first used in.  */
       gcc_unreachable ();
     }
 
@@ -371,7 +371,9 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
      In that case, we will abort below when we try to save a new GCC tree
      for this object.  We also need to handle the case of getting a dummy
      type when a Full_View exists but be careful so as not to trigger its
-     premature elaboration.  */
+     premature elaboration.  Likewise for a cloned subtype without its own
+     freeze node, which typically happens when a generic gets instantiated
+     on an incomplete or private type.  */
   if ((!definition || (is_type && imported_p))
       && present_gnu_tree (gnat_entity))
     {
@@ -385,7 +387,23 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
 	      || No (Freeze_Node (Full_View (gnat_entity)))))
 	{
 	  gnu_decl
-	    = gnat_to_gnu_entity (Full_View (gnat_entity), NULL_TREE, false);
+	    = gnat_to_gnu_entity (Full_View (gnat_entity), NULL_TREE,
+				  false);
+	  save_gnu_tree (gnat_entity, NULL_TREE, false);
+	  save_gnu_tree (gnat_entity, gnu_decl, false);
+	}
+
+      if (TREE_CODE (gnu_decl) == TYPE_DECL
+	  && TYPE_IS_DUMMY_P (TREE_TYPE (gnu_decl))
+	  && Ekind (gnat_entity) == E_Record_Subtype
+	  && No (Freeze_Node (gnat_entity))
+	  && Present (Cloned_Subtype (gnat_entity))
+	  && (present_gnu_tree (Cloned_Subtype (gnat_entity))
+	      || No (Freeze_Node (Cloned_Subtype (gnat_entity)))))
+	{
+	  gnu_decl
+	    = gnat_to_gnu_entity (Cloned_Subtype (gnat_entity), NULL_TREE,
+				  false);
 	  save_gnu_tree (gnat_entity, NULL_TREE, false);
 	  save_gnu_tree (gnat_entity, gnu_decl, false);
 	}
@@ -3367,13 +3385,13 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
     case E_Record_Subtype:
       /* If Cloned_Subtype is Present it means this record subtype has
 	 identical layout to that type or subtype and we should use
-	 that GCC type for this one.  The front end guarantees that
+	 that GCC type for this one.  The front-end guarantees that
 	 the component list is shared.  */
       if (Present (Cloned_Subtype (gnat_entity)))
 	{
 	  gnu_decl = gnat_to_gnu_entity (Cloned_Subtype (gnat_entity),
 					 NULL_TREE, false);
-	  saved = true;
+	  maybe_present = true;
 	  break;
 	}
 
@@ -3787,8 +3805,8 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
     case E_Access_Subtype:
       /* We treat this as identical to its base type; any constraint is
 	 meaningful only to the front-end.  */
-      gnu_decl = gnat_to_gnu_entity (Etype (gnat_entity), NULL_TREE, false);
-      saved = true;
+      gnu_decl = gnat_to_gnu_entity (gnat_equiv_type, NULL_TREE, false);
+      maybe_present = true;
 
       /* The designated subtype must be elaborated as well, if it does
 	 not have its own freeze node.  But designated subtypes created
@@ -4974,6 +4992,10 @@ Gigi_Equivalent_Type (Entity_Id gnat_entity)
 	gnat_equiv = Equivalent_Type (gnat_entity);
       break;
 
+    case E_Access_Subtype:
+      gnat_equiv = Etype (gnat_entity);
+      break;
+
     case E_Class_Wide_Type:
       gnat_equiv = Root_Type (gnat_entity);
       break;
@@ -6065,7 +6087,8 @@ static void
 set_nonaliased_component_on_array_type (tree type)
 {
   TYPE_NONALIASED_COMPONENT (type) = 1;
-  TYPE_NONALIASED_COMPONENT (TYPE_CANONICAL (type)) = 1;
+  if (TYPE_CANONICAL (type))
+    TYPE_NONALIASED_COMPONENT (TYPE_CANONICAL (type)) = 1;
 }
 
 /* Set TYPE_REVERSE_STORAGE_ORDER on an array type built by means of
@@ -6075,7 +6098,8 @@ static void
 set_reverse_storage_order_on_array_type (tree type)
 {
   TYPE_REVERSE_STORAGE_ORDER (type) = 1;
-  TYPE_REVERSE_STORAGE_ORDER (TYPE_CANONICAL (type)) = 1;
+  if (TYPE_CANONICAL (type))
+    TYPE_REVERSE_STORAGE_ORDER (TYPE_CANONICAL (type)) = 1;
 }
 
 /* Return true if DISCR1 and DISCR2 represent the same discriminant.  */
@@ -6099,12 +6123,6 @@ same_discriminant_p (Entity_Id discr1, Entity_Id discr2)
 static bool
 array_type_has_nonaliased_component (tree gnu_type, Entity_Id gnat_type)
 {
-  /* If the array type is not the innermost dimension of the GNAT type,
-     then it has a non-aliased component.  */
-  if (TREE_CODE (TREE_TYPE (gnu_type)) == ARRAY_TYPE
-      && TYPE_MULTI_ARRAY_P (TREE_TYPE (gnu_type)))
-    return true;
-
   /* If the array type has an aliased component in the front-end sense,
      then it also has an aliased component in the back-end sense.  */
   if (Has_Aliased_Components (gnat_type))
@@ -6115,14 +6133,16 @@ array_type_has_nonaliased_component (tree gnu_type, Entity_Id gnat_type)
   if (Is_Derived_Type (gnat_type))
     {
       tree gnu_parent_type = gnat_to_gnu_type (Etype (gnat_type));
-      int index;
       if (TREE_CODE (gnu_parent_type) == UNCONSTRAINED_ARRAY_TYPE)
 	gnu_parent_type
 	  = TREE_TYPE (TREE_TYPE (TYPE_FIELDS (TREE_TYPE (gnu_parent_type))));
-      for (index = Number_Dimensions (gnat_type) - 1; index > 0; index--)
-	gnu_parent_type = TREE_TYPE (gnu_parent_type);
       return TYPE_NONALIASED_COMPONENT (gnu_parent_type);
     }
+
+  /* For a multi-dimensional array type, find the component type.  */
+  while (TREE_CODE (TREE_TYPE (gnu_type)) == ARRAY_TYPE
+	 && TYPE_MULTI_ARRAY_P (TREE_TYPE (gnu_type)))
+    gnu_type = TREE_TYPE (gnu_type);
 
   /* Consider that an array of pointers has an aliased component, which is
      sort of logical and helps with Taft Amendment types in LTO mode.  */
@@ -8160,8 +8180,20 @@ annotate_value (tree gnu_size)
     case EQ_EXPR:		tcode = Eq_Expr; break;
     case NE_EXPR:		tcode = Ne_Expr; break;
 
-    case MULT_EXPR:
     case PLUS_EXPR:
+      /* Turn addition of negative constant into subtraction.  */
+      if (TREE_CODE (TREE_OPERAND (gnu_size, 1)) == INTEGER_CST
+	  && tree_int_cst_sign_bit (TREE_OPERAND (gnu_size, 1)))
+	{
+	  tcode = Minus_Expr;
+	  wide_int wop1 = -wi::to_wide (TREE_OPERAND (gnu_size, 1));
+	  ops[1] = annotate_value (wide_int_to_tree (sizetype, wop1));
+	  break;
+	}
+
+      /* ... fall through ... */
+
+    case MULT_EXPR:
       tcode = (TREE_CODE (gnu_size) == MULT_EXPR ? Mult_Expr : Plus_Expr);
       /* Fold conversions from bytes to bits into inner operations.  */
       if (TREE_CODE (TREE_OPERAND (gnu_size, 1)) == INTEGER_CST
@@ -8171,6 +8203,7 @@ annotate_value (tree gnu_size)
 	  if (TREE_CODE (inner_op) == TREE_CODE (gnu_size)
 	      && TREE_CODE (TREE_OPERAND (inner_op, 1)) == INTEGER_CST)
 	    {
+	      ops[0] = annotate_value (TREE_OPERAND (inner_op, 0));
 	      tree inner_op_op1 = TREE_OPERAND (inner_op, 1);
 	      tree gnu_size_op1 = TREE_OPERAND (gnu_size, 1);
 	      widest_int op1;
@@ -8178,10 +8211,13 @@ annotate_value (tree gnu_size)
 		op1 = (wi::to_widest (inner_op_op1)
 		       * wi::to_widest (gnu_size_op1));
 	      else
-		op1 = (wi::to_widest (inner_op_op1)
-		       + wi::to_widest (gnu_size_op1));
-	      ops[1] = UI_From_gnu (wide_int_to_tree (sizetype, op1));
-	      ops[0] = annotate_value (TREE_OPERAND (inner_op, 0));
+		{
+		  op1 = (wi::to_widest (inner_op_op1)
+			 + wi::to_widest (gnu_size_op1));
+		  if (wi::zext (op1, TYPE_PRECISION (sizetype)) == 0)
+		    return ops[0];
+		}
+	      ops[1] = annotate_value (wide_int_to_tree (sizetype, op1));
 	    }
 	}
       break;
@@ -8189,18 +8225,12 @@ annotate_value (tree gnu_size)
     case BIT_AND_EXPR:
       tcode = Bit_And_Expr;
       /* For negative values in sizetype, build NEGATE_EXPR of the opposite.
-	 Such values appear in expressions with aligning patterns.  Note that,
-	 since sizetype is unsigned, we have to jump through some hoops.   */
+	 Such values can appear in expressions with aligning patterns.  */
       if (TREE_CODE (TREE_OPERAND (gnu_size, 1)) == INTEGER_CST)
 	{
-	  tree op1 = TREE_OPERAND (gnu_size, 1);
-	  wide_int signed_op1 = wi::sext (wi::to_wide (op1),
-					  TYPE_PRECISION (sizetype));
-	  if (wi::neg_p (signed_op1))
-	    {
-	      op1 = wide_int_to_tree (sizetype, wi::neg (signed_op1));
-	      ops[1] = annotate_value (build1 (NEGATE_EXPR, sizetype, op1));
-	    }
+	  wide_int wop1 = -wi::to_wide (TREE_OPERAND (gnu_size, 1));
+	  tree op1 = wide_int_to_tree (sizetype, wop1);
+	  ops[1] = annotate_value (build1 (NEGATE_EXPR, sizetype, op1));
 	}
       break;
 
