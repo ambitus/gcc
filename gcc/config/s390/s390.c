@@ -10301,20 +10301,7 @@ s390_register_info ()
   s390_register_info_stdarg_gpr ();
 }
 
-/* Return true if REGNO is a global register, but not one
-   of the special ones that need to be saved/restored in anyway.  */
-
-static inline bool
-global_not_special_regno_p (int regno)
-{
-  return (global_regs[regno]
-	  /* These registers are special and need to be
-	     restored in any case.  */
-	  && !(regno == STACK_POINTER_REGNUM
-	       || regno == RETURN_REGNUM
-	       || regno == BASE_REGNUM
-	       || (flag_pic && regno == (int)PIC_OFFSET_TABLE_REGNUM)));
-}
+static inline bool global_not_special_regno_p (int regno);
 
 /* This function is called by s390_optimize_prologue in order to get
    rid of unnecessary GPR save/restore instructions.  The register info
