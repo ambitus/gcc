@@ -5331,10 +5331,10 @@ emit_symbolic_move (rtx *operands)
     operands[1] = force_reg (Pmode, operands[1]);
   else if (TLS_SYMBOLIC_CONST (operands[1]))
     operands[1] = legitimize_tls_address (operands[1], temp);
-  else if (TARGET_ZOS && WEAK_REF_P (operands[1]))
-    operands[1] = legitimize_weak_ref (operands[1]);
   else if (flag_pic)
     operands[1] = legitimize_pic_address (operands[1], temp);
+  else if (TARGET_ZOS && WEAK_REF_P (operands[1]))
+    operands[1] = legitimize_weak_ref (operands[1]);
 }
 
 /* Try machine-dependent ways of modifying an illegitimate address X
@@ -5362,10 +5362,6 @@ s390_legitimize_address (rtx x, rtx oldx ATTRIBUTE_UNUSED,
       if (s390_legitimate_address_p (mode, x, FALSE))
 	return x;
     }
-  else if (TARGET_ZOS && WEAK_REF_P (x))
-    {
-      x = legitimize_weak_ref (x);
-    }
   else if (GET_CODE (x) == PLUS
 	   && (TLS_SYMBOLIC_CONST (XEXP (x, 0))
 	       || TLS_SYMBOLIC_CONST (XEXP (x, 1))))
@@ -5382,6 +5378,10 @@ s390_legitimize_address (rtx x, rtx oldx ATTRIBUTE_UNUSED,
 
       if (s390_legitimate_address_p (mode, x, FALSE))
 	return x;
+    }
+  else if (TARGET_ZOS && WEAK_REF_P (x))
+    {
+      x = legitimize_weak_ref (x);
     }
 
   x = eliminate_constant_term (x, &constant_term);
