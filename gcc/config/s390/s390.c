@@ -10248,19 +10248,19 @@ s390_register_info ()
     |= (cfun->machine->base_reg
 	&& REGNO (cfun->machine->base_reg) == BASE_REGNUM);
 
+  /* Register 12 is used for GOT address, but also as temp in prologue
+     for split-stack stdarg functions (unless r14 is available).  */
+  clobbered_regs[12]
+    |= ((flag_pic && df_regs_ever_live_p (PIC_OFFSET_TABLE_REGNUM))
+	|| (flag_split_stack && cfun->stdarg
+	    && (crtl->is_leaf || TARGET_TPF_PROFILING
+		|| has_hard_reg_initial_val (Pmode, RETURN_REGNUM))));
+
   /* This is all linux-specific.  */
   if (!TARGET_ZOS)
     {
       clobbered_regs[HARD_FRAME_POINTER_REGNUM]
 	|= !!frame_pointer_needed;
-
-      /* Register 12 is used for GOT address, but also as temp in prologue
-	 for split-stack stdarg functions (unless r14 is available).  */
-      clobbered_regs[12]
-	|= ((flag_pic && df_regs_ever_live_p (PIC_OFFSET_TABLE_REGNUM))
-	    || (flag_split_stack && cfun->stdarg
-		&& (crtl->is_leaf || TARGET_TPF_PROFILING
-		    || has_hard_reg_initial_val (Pmode, RETURN_REGNUM))));
 
       clobbered_regs[STACK_POINTER_REGNUM]
 	|= (!crtl->is_leaf
@@ -11171,7 +11171,8 @@ global_not_special_regno_p (int regno)
 	    && !(regno == HARD_FRAME_POINTER_REGNUM
 		 || regno == RETURN_REGNUM
 		 || (cfun->calls_alloca
-		     && regno == STACK_POINTER_REGNUM)));
+		     && regno == STACK_POINTER_REGNUM)
+		 || (flag_pic && regno == (int)PIC_OFFSET_TABLE_REGNUM)));
 }
 
 /* Generate insn to save registers FIRST to LAST into
@@ -12026,6 +12027,17 @@ s390_emit_f4sa_prologue (void)
 
   if (cfun->machine->base_reg)
     emit_insn (gen_main_pool (cfun->machine->base_reg));
+
+  /* Load GOT pointer if necessary.  */
+  if (flag_pic && df_regs_ever_live_p (PIC_OFFSET_TABLE_REGNUM))
+    {
+      rtx_insn *insns = s390_load_got ();
+
+      for (rtx_insn *insn = insns; insn; insn = NEXT_INSN (insn))
+	annotate_constant_pool_refs (&PATTERN (insn));
+
+      emit_insn (insns);
+    }
 
   emit_insn (gen_blockage ());
 }
@@ -14048,6 +14060,7 @@ s390_trampoline_init (rtx m_tramp, tree fndecl, rtx cxt)
 
 /* Output assembler code to FILE to increment profiler label # LABELNO
    for profiling a function entry.  */
+/* z/OS TODO: This.  */
 
 void
 s390_function_profiler (FILE *file, int labelno)
