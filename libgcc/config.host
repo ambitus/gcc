@@ -235,11 +235,6 @@ case ${host} in
   tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-fuchsia"
   extra_parts="crtbegin.o crtend.o"
   ;;
-*-*-zos*-gnu*)
-  # z/OS TODO: This case shouldn't be here, but we need to prevent the
-  # next case from catching -zos-gnu, because it is not appropriate for
-  # z/OS yet.
-  ;;
 *-*-linux* | frv-*-*linux* | *-*-kfreebsd*-gnu | *-*-gnu* | *-*-kopensolaris*-gnu)
   tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver t-linux"
   extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
@@ -1178,19 +1173,9 @@ s390x-ibm-tpf*)
 	md_unwind_header=s390/tpf-unwind.h
 	;;
 s390x-*-zos*-gnu*)
-	# z/OS TODO: Decide on which of these to add back in, if any.
-        tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver t-linux"
-	# tmake_file="${tmake_file} t-eh-dw2-dip "
-	#tmake_file="${tmake_file} t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver t-linux"
+	# Try to keep this in line with what z/Linux does.
 	tmake_file="${tmake_file} s390/t-crtstuff s390/t-linux t-stack s390/t-stack-s390"
 	md_unwind_header=s390/zos-unwind.h
-
-        extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
-	#extra_parts="crtbegin.o crtend.o crtbeginT.o"
-	# extra_parts="${extra_parts} crtbeginS.o crtendS.o crtbeginT.o"
-	# if test x$enable_vtable_verify = xyes; then
-	# 	extra_parts="${extra_parts} vtv_start.o vtv_end.o vtv_start_preinit.o vtv_end_preinit.o"
-	# fi
 	;;
 sh-*-elf* | sh[12346l]*-*-elf*)
 	tmake_file="$tmake_file sh/t-sh t-crtstuff-pic t-fdpbit"

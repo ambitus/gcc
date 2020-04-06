@@ -29,13 +29,20 @@ along with GCC; see the file COPYING3.  If not see
 #undef  WCHAR_TYPE_SIZE
 #define WCHAR_TYPE_SIZE 32
 
-#undef TARGET_OS_CPP_BUILTINS
-#define TARGET_OS_CPP_BUILTINS()	\
-  do					\
-    {					\
-      builtin_define ("__ZOS__");	\
-    }					\
+#undef GNU_USER_TARGET_OS_CPP_BUILTINS
+#define GNU_USER_TARGET_OS_CPP_BUILTINS()		\
+  do							\
+    {							\
+      builtin_define ("__ZOS__");			\
+      builtin_define ("__GLIBC__");			\
+      builtin_define_std ("unix");			\
+      builtin_assert ("system=unix");			\
+      builtin_assert ("system=posix");			\
+    }							\
   while (0)
+
+#undef GNU_USER_DYNAMIC_LINKER
+#define GNU_USER_DYNAMIC_LINKER "/lib/ld64.so.1"
 
 /* Quick and dirty hack to prevent collect2 from using --eh-frame-hdr
    for right now, because the linker can't recognize it.
@@ -61,8 +68,7 @@ along with GCC; see the file COPYING3.  If not see
 #define MULTILIB_DEFAULTS { "m31" }
 #endif
 
-/* TODO: This will not currently work properly for dynamically linked
-   executables or PIEs.  */
+/* z/OS TODO: Handle static PIEs.  */
 #undef  LINK_SPEC
 #define LINK_SPEC \
   "%{m64:-m po64_s390 -b elf64-s390} \
@@ -70,7 +76,8 @@ along with GCC; see the file COPYING3.  If not see
    %{!shared: \
       %{static:-static} \
       %{!static: \
-	%{rdynamic:-export-dynamic}}}"
+	%{rdynamic:-export-dynamic} \
+	-dynamic-linker " GNU_USER_DYNAMIC_LINKER "}}"
 
 #define CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
 

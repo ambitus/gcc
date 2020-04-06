@@ -756,7 +756,7 @@ case ${target} in
   esac
   tmake_file="t-slibgcc"
   case $target in
-    *-*-linux* | frv-*-*linux* | *-*-kfreebsd*-gnu | *-*-kopensolaris*-gnu)
+    *-*-linux* | frv-*-*linux* | *-*-kfreebsd*-gnu | *-*-kopensolaris*-gnu | *-*-zos*-gnu)
       :;;
     *-*-gnu*)
       native_system_header_dir=/include
