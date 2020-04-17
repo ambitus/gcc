@@ -44,12 +44,6 @@ along with GCC; see the file COPYING3.  If not see
 #undef GNU_USER_DYNAMIC_LINKER
 #define GNU_USER_DYNAMIC_LINKER "/lib/ld64.so.1"
 
-/* Quick and dirty hack to prevent collect2 from using --eh-frame-hdr
-   for right now, because the linker can't recognize it.
-   z/OS TODO: Either implement --eh-frame-hdr correctly, or prevent
-   HAVE_LD_EH_FRAME_HDR from getting defined.  */
-#undef LINK_EH_SPEC
-
 #undef  ASM_SPEC
 #define ASM_SPEC				\
   "%{m31&m64}%{mesa&mzarch}%{march=z*}"	\
@@ -83,6 +77,15 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Define if long doubles should be mangled as 'g'.  */
 #define TARGET_ALTERNATE_LONG_DOUBLE_MANGLING
+
+#undef TARGET_LIBC_HAS_FUNCTION
+#define TARGET_LIBC_HAS_FUNCTION gnu_libc_has_function
+
+/* Uninitialized common symbols in non-PIE executables, even with
+   strong definitions in dependent shared libraries, will resolve
+   to COPY relocated symbol in the executable.  See PR65780.  */
+#undef TARGET_BINDS_LOCAL_P
+#define TARGET_BINDS_LOCAL_P default_binds_local_p_2
 
 /* DWARF is throwing a fit about F4SA... TODO */
 /*
