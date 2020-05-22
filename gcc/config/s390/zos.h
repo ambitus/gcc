@@ -29,12 +29,10 @@ along with GCC; see the file COPYING3.  If not see
 #undef  WCHAR_TYPE_SIZE
 #define WCHAR_TYPE_SIZE 32
 
-#undef GNU_USER_TARGET_OS_CPP_BUILTINS
-#define GNU_USER_TARGET_OS_CPP_BUILTINS()		\
+#define TARGET_OS_CPP_BUILTINS()			\
   do							\
     {							\
       builtin_define ("__ZOS__");			\
-      builtin_define ("__GLIBC__");			\
       builtin_define_std ("unix");			\
       builtin_assert ("system=unix");			\
       builtin_assert ("system=posix");			\
