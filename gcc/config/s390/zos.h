@@ -63,7 +63,7 @@ along with GCC; see the file COPYING3.  If not see
 /* z/OS TODO: Handle static PIEs.  */
 #undef  LINK_SPEC
 #define LINK_SPEC \
-  "%{m64:-m po64_s390 -b elf64-s390} \
+  "%{m64:-m po64_s390 -b po64-s390} \
    %{shared:-shared} \
    %{!shared: \
       %{static:-static} \
