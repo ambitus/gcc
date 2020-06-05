@@ -82,12 +82,6 @@
 # define USE_PT_GNU_EH_FRAME
 #endif
 
-#if defined(__ZOS__)
-/* z/OS TODO: disable this stuff until dl_iterate_phdr is
-   implemented.  */
-# undef USE_PT_GNU_EH_FRAME
-#endif
-
 #if defined(USE_PT_GNU_EH_FRAME)
 
 #include <link.h>
