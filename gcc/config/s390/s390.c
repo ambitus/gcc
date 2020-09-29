@@ -13698,26 +13698,47 @@ s390_gimplify_va_arg (tree valist, tree type, gimple_seq *pre_p,
   tree pos, t;
   tree addr = create_tmp_var (ptr_type_node, "addr");
   long size;
-  
+  int indirect_p;
+
   f_pos = TYPE_FIELDS (TREE_TYPE (va_list_type_node));
 
   pos = build3 (COMPONENT_REF, TREE_TYPE (f_pos), valist, f_pos, NULL_TREE);
 
-  size = int_size_in_bytes (type);
+  if (pass_by_reference (NULL, TYPE_MODE (type), type, false))
+    {
+      size = int_size_in_bytes (build_pointer_type (type));
+      indirect_p = 1;
+    }
+  else
+    {
+      size = int_size_in_bytes (type);
+      indirect_p = 0;
+      gcc_assert (size <= UNITS_PER_LONG);
+    }
+
+  /* Create a pointer to the actual start of the argument in
+     the 8-byte arg slot (right-aligned).  */
   t = fold_build_pointer_plus_hwi (pos, UNITS_PER_LONG - size);
-
   gimplify_expr (&t, pre_p, NULL, is_gimple_val, fb_rvalue);
-
   gimplify_assign (addr, t, pre_p);
 
-  /* Update counter */
+  /* Update next va arg pointer.  */
   t = fold_build_pointer_plus_hwi (t, size);
-
   gimplify_assign (pos, t, pre_p);
 
   /* Set types */
-  t = build_pointer_type_for_mode (type, ptr_mode, true);
-  addr = fold_convert (t, addr);
+  if (indirect_p)
+    {
+      t = build_pointer_type_for_mode (build_pointer_type (type),
+				       ptr_mode, true);
+      addr = fold_convert (t, addr);
+      addr = build_va_arg_indirect_ref (addr);
+    }
+  else
+    {
+      t = build_pointer_type_for_mode (type, ptr_mode, true);
+      addr = fold_convert (t, addr);
+    }
 
   return build_va_arg_indirect_ref (addr);
 }
