@@ -11175,6 +11175,8 @@ global_not_special_regno_p (int regno)
 		 || (flag_pic && regno == (int)PIC_OFFSET_TABLE_REGNUM)));
 }
 
+/* z/OS TODO: Unifying save_gprs for z/OS and linux was a mistake.
+   Separate it into z/OS and linux functions.  */
 /* Generate insn to save registers FIRST to LAST into
    the register save area located at offset OFFSET
    relative to register BASE.  */
@@ -11857,18 +11859,22 @@ s390_emit_f4sa_prologue (void)
      kind of a hack, ideally they should be right after the regular
      saves.  */
   fprs_offset = (get_frame_size () + F4SA_DSA_SIZE);
-  // printf ("init fprs_offset: %ld\n", fprs_offset);
 
   start_sequence ();
   if (cfun_save_high_fprs_p)
     for (i = FPR8_REGNUM; i <= FPR15_REGNUM; i++)
       if (cfun_fpr_save_p (i))
 	{
-	  save_fpr (hard_frame_pointer_rtx, fprs_offset, i, r15);
-	  /* RTX_FRAME_RELATED_P (save) = 1;  */
+	  rtx save = save_fpr (hard_frame_pointer_rtx,
+			       fprs_offset, i, r15);
+	  rtx loc = plus_constant (Pmode,
+				   hard_frame_pointer_rtx, fprs_offset);
+	  add_reg_note (save, REG_CFA_VAL_EXPRESSION,
+			gen_rtx_SET (gen_rtx_REG (Pmode, i),
+				     gen_rtx_MEM (Pmode, loc)));
+	  RTX_FRAME_RELATED_P (save) = 1;
 	  fprs_offset += 8;
 	}
-  // printf ("after fp fprs_offset: %ld\n", fprs_offset);
 
   /* z/OS TODO: Generate saves for vrs.  */
 
@@ -11913,14 +11919,10 @@ s390_emit_f4sa_prologue (void)
       rtx r0, addr, insn, next_dsa_ptr;
       rtx increment;
 
-      /* r15 <- 136(r13)
-	 Also mark r15 as the new CFA reg.  */
+      /* r15 <- 136(r13)  */
       next_dsa_ptr = plus_constant (Pmode, hard_frame_pointer_rtx, 136);
       addr = gen_rtx_MEM (Pmode, next_dsa_ptr);
-
       insn = emit_move_insn (r15, addr);
-      add_reg_note (insn, REG_CFA_DEF_CFA, addr);
-      RTX_FRAME_RELATED_P (insn) = 1;
 
       if (s390_stack_size)
 	emit_stack_size_traps (next_dsa_ptr);
@@ -12012,7 +12014,12 @@ s390_emit_f4sa_prologue (void)
          z/OS TODO: Make sure that this always occurs after the DSA
          setup has completed. Prevent scheduling later.  */
       insn = emit_move_insn (hard_frame_pointer_rtx, r15);
-      add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
+      /* Explicitly describe how we can find the CFA now.  */
+      rtx back = plus_constant (Pmode, hard_frame_pointer_rtx, 128);
+      add_reg_note (insn, REG_CFA_DEF_CFA, gen_rtx_MEM (Pmode, back));
+      add_reg_note (insn, REG_CFA_VAL_EXPRESSION,
+		    gen_rtx_SET (hard_frame_pointer_rtx,
+				 gen_rtx_MEM (Pmode, back)));
       RTX_FRAME_RELATED_P (insn) = 1;
 
       /* Emit fpr/vr saves.  */
@@ -12387,7 +12394,7 @@ void s390_emit_f4sa_epilogue (bool sibcall)
 	  {
 	    rtx restore =
 	      restore_fpr (hard_frame_pointer_rtx, fprs_offset, i, temp);
-	    /* RTX_FRAME_RELATED_P (restore) = 1;  */
+	    RTX_FRAME_RELATED_P (restore) = 1;
 	    add_reg_note (restore, REG_CFA_RESTORE,
 			  gen_rtx_REG (Pmode, i));
 	    fprs_offset += 8;
@@ -12415,8 +12422,9 @@ void s390_emit_f4sa_epilogue (bool sibcall)
       addr = gen_rtx_MEM (Pmode, addr);
       insn = emit_move_insn (hard_frame_pointer_rtx, addr);
 
-      add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
       RTX_FRAME_RELATED_P (insn) = 1;
+      add_reg_note (insn, REG_CFA_RESTORE, hard_frame_pointer_rtx);
+      add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
     }
 
   if (first != -1)

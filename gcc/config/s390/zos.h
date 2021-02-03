@@ -155,12 +155,12 @@ along with GCC; see the file COPYING3.  If not see
    haven't seen the linux port generate incorrect atomic code yet, but at
    some point we should go through and check the atomic codegen.  */
 
-/* z/OS TODO: Strictly, our CFA should be the value of 136(r13) on
-   entry, before prologue code has run.  */
-/* Our CFA is the value of r13 on entry to the function.  */
+/* Our CFA must be the bottom of the frame, because we cannot know where
+   the top of the frame is when we are returning.  */
 #undef ARG_POINTER_CFA_OFFSET
 #undef FRAME_POINTER_CFA_OFFSET
-#define FRAME_POINTER_CFA_OFFSET(FNDECL) ((void) (FNDECL), 0)
+#define FRAME_POINTER_CFA_OFFSET(FNDECL) \
+  ((void) (FNDECL), -get_frame_size ().coeffs[0] - 152)
 
 /* Set up fixed registers and calling convention:
 

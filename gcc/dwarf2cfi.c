@@ -2996,19 +2996,17 @@ create_cie_data (void)
 
   /* On entry, the Canonical Frame Address is at SP.  */
   memset (&loc, 0, sizeof (loc));
-#if TARGET_ZOS==1
-  /* FIXME: I can't for the life of me figure this one out yet */
+#if TARGET_ZOS == 1
   loc.reg = dw_frame_pointer_regnum;
-  loc.offset = 0;
 #else
   loc.reg = dw_stack_pointer_regnum;
+#endif
   /* create_cie_data is called just once per TU, and when using .cfi_startproc
      is even done by the assembler rather than the compiler.  If the target
      has different incoming frame sp offsets depending on what kind of
      function it is, use a single constant offset for the target and
      if needed, adjust before the first instruction in insn stream.  */
   loc.offset = DEFAULT_INCOMING_FRAME_SP_OFFSET;
-#endif
   def_cfa_1 (&loc);
 
   if (targetm.debug_unwind_info () == UI_DWARF2
