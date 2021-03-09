@@ -1685,7 +1685,25 @@ uw_install_context_1 (struct _Unwind_Context *current,
       void *c = (void *) (_Unwind_Internal_Ptr) current->reg[i];
       void *t = (void *) (_Unwind_Internal_Ptr)target->reg[i];
 
+#if TARGET_ZOS != 1
       gcc_assert (current->by_value[i] == 0);
+#else
+      if (current->by_value[i])
+	{
+	  _Unwind_Ptr p;
+	  gcc_assert (dwarf_reg_size_table[i] == sizeof (_Unwind_Ptr)
+		      && sizeof (_Unwind_Context_Reg_Val) == sizeof (_Unwind_Ptr)
+		      && sizeof (void *) == sizeof (_Unwind_Ptr));
+	  if (target->by_value[i])
+	    {
+	      p = (_Unwind_Internal_Ptr) t;
+	      memcpy (&current->reg[i], &p, sizeof (_Unwind_Ptr));
+	    }
+	  else if (t != c)
+	    memcpy (&current->reg[i], t, dwarf_reg_size_table[i]);
+	}
+      else
+#endif
       if (target->by_value[i] && c)
 	{
 	  _Unwind_Word w;
