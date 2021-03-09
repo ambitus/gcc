@@ -228,7 +228,11 @@ static unsigned dw_frame_pointer_regnum;
 rtx
 expand_builtin_dwarf_sp_column (void)
 {
+#if TARGET_ZOS == 1  /* On z/OS, the incoming SP reg is not the CFA.  */
+  unsigned int dwarf_regnum = DWARF_FRAME_REGNUM (HARD_FRAME_POINTER_REGNUM);
+#else
   unsigned int dwarf_regnum = DWARF_FRAME_REGNUM (STACK_POINTER_REGNUM);
+#endif
   return GEN_INT (DWARF2_FRAME_REG_OUT (dwarf_regnum, 1));
 }
 
