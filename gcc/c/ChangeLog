@@ -1,3 +1,162 @@
+2019-11-21  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from mainline
+	2019-08-09  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/91401
+	* c-parser.c (c_parser_omp_clause_dist_schedule): Fix up typos in the
+	check_no_duplicate_clause call.  Comment it out, instead emit a
+	warning for duplicate dist_schedule clauses.
+
+2019-09-03  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backport from mainline.
+	2019-08-23  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR pch/61250
+	* c-parser.c (c_parse_file): Call c_common_no_more_pch ()
+	after determining that the first token is not
+	PRAGMA_GCC_PCH_PREPROCESS.
+
+2019-08-29  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from mainline
+	2019-04-26  Jakub Jelinek  <jakub@redhat.com>
+
+	PR debug/90197
+	* c-tree.h (c_finish_loop): Add 2 further location_t arguments.
+	* c-parser.c (c_parser_while_statement): Adjust c_finish_loop caller.
+	(c_parser_do_statement): Likewise.
+	(c_parser_for_statement): Likewise.  Formatting fixes.
+	* c-typeck.c (c_finish_loop): Add COND_LOCUS and INCR_LOCUS arguments,
+	emit DEBUG_BEGIN_STMTs if needed.
+
+2019-07-21  Richard Sandiford  <richard.sandiford@arm.com>
+
+	Backport from mainline
+	2019-07-18  Richard Sandiford  <richard.sandiford@arm.com>
+
+	PR c/53633
+	* c-decl.c (finish_function): Check targetm.warn_func_return
+	before issuing a -Wreturn-type warning.
+
+2019-04-30  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from mainline
+	2019-04-19  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/90108
+	* c-decl.c (merge_decls): If remove is main variant and
+	DECL_ORIGINAL_TYPE is some other type, remove a DECL_ORIGINAL_TYPE
+	variant that has newdecl as TYPE_NAME if any.
+
+	2019-04-12  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/89933
+	* c-decl.c (merge_decls): When newdecl's type is its main variant,
+	don't try to remove it from the variant list, but instead assert
+	it has no variants.
+
+	2019-03-19  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/89734
+	* c-decl.c (grokdeclarator): Call c_build_qualified_type on function
+	return type even if quals_used is 0.  Formatting fixes.
+
+2019-02-22  Release Manager
+
+	* GCC 8.3.0 released.
+
+2019-02-07  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from mainline
+	2019-02-06  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/89211
+	* c-parser.c (c_parser_declaration_or_fndef): Don't update
+	DECL_ARGUMENTS of d if it has been defined already.  Use a single if
+	instead of 3 nested ifs.
+
+2019-01-15  Joseph Myers  <joseph@codesourcery.com>
+
+	Backport from mainline
+	2019-01-07  Joseph Myers  <joseph@codesourcery.com>
+
+	PR c/88720
+	PR c/88726
+	* c-decl.c (pop_scope): Use TREE_PUBLIC and b->nested to determine
+	whether a function is nested, not DECL_EXTERNAL.  Diagnose inline
+	functions declared but never defined only for external scope, not
+	for other scopes.
+
+2019-01-08  Jakub Jelinek  <jakub@redhat.com>
+
+	Backported from mainline
+	2018-12-11  Jakub Jelinek  <jakub@redhat.com>
+
+	PR sanitizer/88426
+	* c-convert.c (convert): Call c_fully_fold before calling
+	ubsan_instrument_float_cast.
+
+2018-01-02  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	Backport from trunk
+	2018-12-06  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	PR inline-asm/55681
+	* c-parser.c (c_parser_asm_statement): Update grammar.  Allow any
+	combination of volatile and goto, in any order, without repetitions.
+
+	Backport from trunk
+	2018-12-06  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	* c-parser.c (c_parser_asm_statement): Detect the inline keyword
+	after asm.  Pass a flag for it to build_asm_expr.
+	* c-tree.h (build_asm_expr): Update declaration.
+	* c-typeck.c (build_asm_stmt): Add is_inline parameter.  Use it to
+	set ASM_INLINE_P.
+
+	Backport from trunk
+	2018-12-08  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	* c-parser (c_parser_asm_statement) [RID_INLINE]: Delete stray line
+	setting "quals".
+
+	Backport from trunk
+	2018-12-19  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	* c-parser.c (c_parser_asm_statement): Rewrite the loop to work without
+	"done" boolean variable.
+
+	Backport from trunk
+	2018-12-19  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	* c-parser.c (c_parser_asm_statement): Keep track of the location each
+	asm qualifier is first seen; use that to give nicer "duplicate asm
+	qualifier" messages.  Delete 'quals" variable, instead pass the
+	"is_volatile_ flag to build_asm_stmt directly.
+	* c-tree.h (build_asm_stmt): Make the first arg bool instead of tree.
+	* c-typeck.c (build_asm_stmt): Ditto; adjust.
+
+	Backport from trunk
+	2018-12-19  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	* c-parser.c (c_parser_asm_statement) <RID_CONST, RID_RESTRICT>: Give
+	a more specific error message (instead of just falling through).
+
+	And extra for the backport
+	2019-01-02  Segher Boessenkool  <segher@kernel.crashing.org>
+
+	* c-parser.c (c_parser_asm_statement): Output a warning instead of an
+	error for const and restrict.
+
+2018-08-01  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/85704
+	* c-typeck.c (init_field_decl_cmp): New function.
+	(output_pending_init_elements): Use it for field comparisons
+	instead of pure bit_position comparisons.
+
 2018-07-26  Release Manager
 
 	* GCC 8.2.0 released.

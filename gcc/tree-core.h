@@ -997,7 +997,9 @@ struct GTY(()) tree_base {
        expression trees and specify known data non-dependences.  For
        two memory references in a function they are known to not
        alias if dependence_info.clique are equal and dependence_info.base
-       are distinct.  */
+       are distinct.  Clique number zero means there is no information,
+       clique number one is populated from function global information
+       and thus needs no remapping on transforms like loop unrolling.  */
     struct {
       unsigned short clique;
       unsigned short base;
@@ -1160,6 +1162,9 @@ struct GTY(()) tree_base {
 
        OMP_CLAUSE_LINEAR_VARIABLE_STRIDE in
 	   OMP_CLAUSE_LINEAR
+
+       ASM_INLINE_P in
+	   ASM_EXPR
 
    side_effects_flag:
 
@@ -1641,6 +1646,7 @@ struct GTY(()) tree_decl_common {
   /* In a VAR_DECL and PARM_DECL, this is DECL_READ_P.  */
   unsigned decl_read_flag : 1;
   /* In a VAR_DECL or RESULT_DECL, this is DECL_NONSHAREABLE.  */
+  /* In a PARM_DECL, this is DECL_HIDDEN_STRING_LENGTH.  */
   unsigned decl_nonshareable_flag : 1;
 
   /* DECL_OFFSET_ALIGN, used only for FIELD_DECLs.  */
@@ -1796,8 +1802,8 @@ struct GTY(()) tree_function_decl {
   unsigned pure_flag : 1;
   unsigned looping_const_or_pure_flag : 1;
   unsigned has_debug_args_flag : 1;
-  unsigned tm_clone_flag : 1;
   unsigned versioned_function : 1;
+  unsigned lambda_function: 1;
   /* No bits left.  */
 };
 

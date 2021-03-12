@@ -951,6 +951,8 @@ s390_expand_builtin (tree exp, rtx target, rtx subtarget ATTRIBUTE_UNUSED,
 	  continue;
 	}
 
+      /* A memory operand is rejected by the memory_operand predicate.
+	 Try making the address legal by copying it into a register.  */
       if (MEM_P (op[arity])
 	  && insn_op->predicate == memory_operand
 	  && (GET_MODE (XEXP (op[arity], 0)) == Pmode
@@ -974,10 +976,14 @@ s390_expand_builtin (tree exp, rtx target, rtx subtarget ATTRIBUTE_UNUSED,
 	{
 	  op[arity] = tmp_rtx;
 	}
-      else if (GET_MODE (op[arity]) == insn_op->mode
-	       || GET_MODE (op[arity]) == VOIDmode
-	       || (insn_op->predicate == address_operand
-		   && GET_MODE (op[arity]) == Pmode))
+
+      /* The predicate rejects the operand although the mode is fine.
+	 Copy the operand to register.  */
+      if (!insn_op->predicate (op[arity], insn_op->mode)
+	  && (GET_MODE (op[arity]) == insn_op->mode
+	      || GET_MODE (op[arity]) == VOIDmode
+	      || (insn_op->predicate == address_operand
+		  && GET_MODE (op[arity]) == Pmode)))
 	{
 	  /* An address_operand usually has VOIDmode in the expander
 	     so we cannot use this.  */
@@ -6865,11 +6871,16 @@ s390_expand_vec_init (rtx target, rtx vals)
       return;
     }
 
+  /* Use vector replicate instructions.  vlrep/vrepi/vrep  */
   if (all_same)
     {
-      emit_insn (gen_rtx_SET (target,
-			      gen_rtx_VEC_DUPLICATE (mode,
-						     XVECEXP (vals, 0, 0))));
+      rtx elem = XVECEXP (vals, 0, 0);
+
+      /* vec_splats accepts general_operand as source.  */
+      if (!general_operand (elem, GET_MODE (elem)))
+	elem = force_reg (inner_mode, elem);
+
+      emit_insn (gen_rtx_SET (target, gen_rtx_VEC_DUPLICATE (mode, elem)));
       return;
     }
 
@@ -10290,6 +10301,8 @@ s390_register_info ()
   s390_register_info_stdarg_gpr ();
 }
 
+static inline bool global_not_special_regno_p (int regno);
+
 /* This function is called by s390_optimize_prologue in order to get
    rid of unnecessary GPR save/restore instructions.  The register info
    for the GPRs is re-computed and the ranges are re-calculated.  */
@@ -10305,8 +10318,10 @@ s390_optimize_register_info ()
 
   s390_regs_ever_clobbered (clobbered_regs);
 
+  /* Global registers do not need to be saved and restored unless it
+     is one of our special regs.  (r12, r13, r14, or r15).  */
   for (i = 0; i < 32; i++)
-    clobbered_regs[i] = clobbered_regs[i] && !global_regs[i];
+    clobbered_regs[i] = clobbered_regs[i] && !global_not_special_regno_p (i);
 
   /* There is still special treatment needed for cases invisible to
      s390_regs_ever_clobbered.  */
@@ -17078,6 +17093,7 @@ s390_can_inline_p (tree caller, tree callee)
 
   return ret;
 }
+#endif
 
 /* Set VAL to correct enum value according to the indirect-branch or
    function-return attribute in ATTR.  */
@@ -17151,6 +17167,7 @@ s390_indirect_branch_settings (tree fndecl)
     s390_indirect_branch_attrvalue (attr, &cfun->machine->function_return_mem);
 }
 
+#if S390_USE_TARGET_ATTRIBUTE
 /* Restore targets globals from NEW_TREE and invalidate s390_previous_fndecl
    cache.  */
 
@@ -17166,6 +17183,7 @@ s390_activate_target_options (tree new_tree)
     TREE_TARGET_GLOBALS (new_tree) = save_target_globals_default_opts ();
   s390_previous_fndecl = NULL_TREE;
 }
+#endif
 
 /* Establish appropriate back-end context for processing the function
    FNDECL.  The argument might be NULL to indicate processing at top
@@ -17173,6 +17191,7 @@ s390_activate_target_options (tree new_tree)
 static void
 s390_set_current_function (tree fndecl)
 {
+#if S390_USE_TARGET_ATTRIBUTE
   /* Only change the context if the function changes.  This hook is called
      several times in the course of compiling a function, and we don't want to
      slow things down too much or call target_reinit when it isn't safe.  */
@@ -17204,10 +17223,9 @@ s390_set_current_function (tree fndecl)
   if (old_tree != new_tree)
     s390_activate_target_options (new_tree);
   s390_previous_fndecl = fndecl;
-
+#endif
   s390_indirect_branch_settings (fndecl);
 }
-#endif
 
 /* Implement TARGET_USE_BY_PIECES_INFRASTRUCTURE_P.  */
 
@@ -17960,10 +17978,10 @@ s390_internal_arg_pointer (void)
 #undef TARGET_ASM_FILE_END
 #define TARGET_ASM_FILE_END s390_asm_file_end
 
-#if S390_USE_TARGET_ATTRIBUTE
 #undef TARGET_SET_CURRENT_FUNCTION
 #define TARGET_SET_CURRENT_FUNCTION s390_set_current_function
 
+#if S390_USE_TARGET_ATTRIBUTE
 #undef TARGET_OPTION_VALID_ATTRIBUTE_P
 #define TARGET_OPTION_VALID_ATTRIBUTE_P s390_valid_target_attribute_p
 

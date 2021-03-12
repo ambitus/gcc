@@ -129,6 +129,11 @@ pack_ts_base_value_fields (struct bitpack_d *bp, tree expr)
       bp_pack_value (bp, SSA_NAME_IS_DEFAULT_DEF (expr), 1);
       bp_pack_value (bp, 0, 8);
     }
+  else if (TREE_CODE (expr) == CALL_EXPR)
+    {
+      bp_pack_value (bp, CALL_EXPR_BY_DESCRIPTOR (expr), 1);
+      bp_pack_value (bp, 0, 8);
+    }
   else
     bp_pack_value (bp, 0, 9);
 }
@@ -207,7 +212,7 @@ pack_ts_decl_common_value_fields (struct bitpack_d *bp, tree expr)
       bp_pack_var_len_unsigned (bp, EH_LANDING_PAD_NR (expr));
     }
 
-  if (TREE_CODE (expr) == FIELD_DECL)
+  else if (TREE_CODE (expr) == FIELD_DECL)
     {
       bp_pack_value (bp, DECL_PACKED (expr), 1);
       bp_pack_value (bp, DECL_NONADDRESSABLE_P (expr), 1);
@@ -215,11 +220,14 @@ pack_ts_decl_common_value_fields (struct bitpack_d *bp, tree expr)
       bp_pack_value (bp, expr->decl_common.off_align, 8);
     }
 
-  if (VAR_P (expr))
+  else if (VAR_P (expr))
     {
       bp_pack_value (bp, DECL_HAS_DEBUG_EXPR_P (expr), 1);
       bp_pack_value (bp, DECL_NONLOCAL_FRAME (expr), 1);
     }
+
+  else if (TREE_CODE (expr) == PARM_DECL)
+    bp_pack_value (bp, DECL_HIDDEN_STRING_LENGTH (expr), 1);
 
   if (TREE_CODE (expr) == RESULT_DECL
       || TREE_CODE (expr) == PARM_DECL
@@ -457,6 +465,8 @@ streamer_write_tree_bitfields (struct output_block *ob, tree expr)
 	  if (MR_DEPENDENCE_CLIQUE (expr) != 0)
 	    bp_pack_value (&bp, MR_DEPENDENCE_BASE (expr), sizeof (short) * 8);
 	}
+      else if (code == CALL_EXPR)
+	bp_pack_enum (&bp, internal_fn, IFN_LAST, CALL_EXPR_IFN (expr));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_BLOCK))
@@ -603,7 +613,16 @@ write_ts_decl_common_tree_pointers (struct output_block *ob, tree expr,
      special handling in LTO, it must be handled by streamer hooks.  */
 
   stream_write_tree (ob, DECL_ATTRIBUTES (expr), ref_p);
-  stream_write_tree (ob, DECL_ABSTRACT_ORIGIN (expr), ref_p);
+
+  /* On non-early-LTO enabled targets we claim we compiled with -g0
+     but dwarf2out still did its set_decl_origin_self game fooling
+     itself late.  Und that here since we won't have access to the
+     early generated abstract DIEs.  */
+  tree ao = DECL_ABSTRACT_ORIGIN (expr);
+  if (debug_info_level == DINFO_LEVEL_NONE
+      && ao == expr)
+    ao = NULL_TREE;
+  stream_write_tree (ob, ao, ref_p);
 
   if ((VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
       && DECL_HAS_VALUE_EXPR_P (expr))

@@ -3273,7 +3273,7 @@
 	 (match_operand:VSX_D 1 "memory_operand" "m,m")
 	 (parallel [(match_operand:QI 2 "const_0_to_1_operand" "n,n")])))
    (clobber (match_scratch:P 3 "=&b,&b"))]
-  "VECTOR_MEM_VSX_P (<VSX_D:MODE>mode)"
+  "TARGET_POWERPC64 && VECTOR_MEM_VSX_P (<VSX_D:MODE>mode)"
   "#"
   "&& reload_completed"
   [(set (match_dup 0) (match_dup 4))]
@@ -3756,9 +3756,9 @@
   DONE;
 })
 
-(define_insn_and_split "*vsx_extract_<VSX_EXTRACT_I:mode>_<SDI:mode>_var"
-  [(set (match_operand:SDI 0 "gpc_reg_operand" "=r,r,r")
-	(zero_extend:SDI
+(define_insn_and_split "*vsx_extract_<mode>_<VS_scalar>mode_var"
+  [(set (match_operand:<VS_scalar> 0 "gpc_reg_operand" "=r,r,r")
+	(zero_extend:<VS_scalar>
 	 (unspec:<VSX_EXTRACT_I:VS_scalar>
 	  [(match_operand:VSX_EXTRACT_I 1 "input_operand" "wK,v,m")
 	   (match_operand:DI 2 "gpc_reg_operand" "r,r,r")]
@@ -3770,7 +3770,7 @@
   "&& reload_completed"
   [(const_int 0)]
 {
-  machine_mode smode = <VSX_EXTRACT_I:MODE>mode;
+  machine_mode smode = <VS_scalar>mode;
   rs6000_split_vec_extract_var (gen_rtx_REG (smode, REGNO (operands[0])),
 				operands[1], operands[2],
 				operands[3], operands[4]);
@@ -4394,7 +4394,7 @@
 	  (match_dup 1))
 	 (parallel [(const_int 1)])))
    (clobber (match_scratch:DF 2 "=0,0,&wd,&wa"))]
-  "VECTOR_UNIT_VSX_P (V2DFmode)"
+  "BYTES_BIG_ENDIAN && VECTOR_UNIT_VSX_P (V2DFmode)"
   "#"
   ""
   [(const_int 0)]
@@ -4421,7 +4421,7 @@
    (clobber (match_scratch:V4SF 2 "=&wf,&wa"))
    (clobber (match_scratch:V4SF 3 "=&wf,&wa"))
    (clobber (match_scratch:V4SF 4 "=0,0"))]
-  "VECTOR_UNIT_VSX_P (V4SFmode)"
+  "BYTES_BIG_ENDIAN && VECTOR_UNIT_VSX_P (V4SFmode)"
   "#"
   ""
   [(const_int 0)]

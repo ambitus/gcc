@@ -300,7 +300,7 @@ c_finish_omp_atomic (location_t loc, enum tree_code code,
   if (TREE_CODE (x) == COMPOUND_EXPR)
     {
       pre = TREE_OPERAND (x, 0);
-      gcc_assert (TREE_CODE (pre) == SAVE_EXPR);
+      gcc_assert (TREE_CODE (pre) == SAVE_EXPR || tree_invariant_p (pre));
       x = TREE_OPERAND (x, 1);
     }
   gcc_assert (TREE_CODE (x) == MODIFY_EXPR);
@@ -373,8 +373,11 @@ c_finish_omp_atomic (location_t loc, enum tree_code code,
 	    }
 	}
       if (blhs)
-	x = build3_loc (loc, BIT_FIELD_REF, TREE_TYPE (blhs), x,
-			bitsize_int (bitsize), bitsize_int (bitpos));
+	{
+	  x = build3_loc (loc, BIT_FIELD_REF, TREE_TYPE (blhs), x,
+			  bitsize_int (bitsize), bitsize_int (bitpos));
+	  type = TREE_TYPE (blhs);
+	}
       x = build_modify_expr (loc, v, NULL_TREE, NOP_EXPR,
 			     loc, x, NULL_TREE);
       if (rhs1 && rhs1 != orig_lhs)

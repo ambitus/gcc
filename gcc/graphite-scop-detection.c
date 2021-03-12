@@ -555,8 +555,15 @@ scop_detection::can_represent_loop (loop_p loop, sese_l scop)
   tree niter;
   struct tree_niter_desc niter_desc;
 
-  return single_exit (loop)
-    && !(loop_preheader_edge (loop)->flags & EDGE_IRREDUCIBLE_LOOP)
+  /* We can only handle do {} while () style loops correctly.  */
+  edge exit = single_exit (loop);
+  if (!exit
+      || !single_pred_p (loop->latch)
+      || exit->src != single_pred (loop->latch)
+      || !empty_block_p (loop->latch))
+    return false;
+
+  return !(loop_preheader_edge (loop)->flags & EDGE_IRREDUCIBLE_LOOP)
     && number_of_iterations_exit (loop, single_exit (loop), &niter_desc, false)
     && niter_desc.control.no_overflow
     && (niter = number_of_latch_executions (loop))
@@ -1407,9 +1414,13 @@ build_alias_set (scop_p scop)
   int i, j;
   int *all_vertices;
 
+  struct loop *nest
+    = find_common_loop (scop->scop_info->region.entry->dest->loop_father,
+			scop->scop_info->region.exit->src->loop_father);
+
   FOR_EACH_VEC_ELT (scop->drs, i, dr1)
     for (j = i+1; scop->drs.iterate (j, &dr2); j++)
-      if (dr_may_alias_p (dr1->dr, dr2->dr, true))
+      if (dr_may_alias_p (dr1->dr, dr2->dr, nest))
 	{
 	  /* Dependences in the same alias set need to be handled
 	     by just looking at DR_ACCESS_FNs.  */

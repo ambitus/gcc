@@ -645,10 +645,13 @@ maybe_convert_cond (tree cond)
     return NULL_TREE;
 
   /* Wait until we instantiate templates before doing conversion.  */
-  if (processing_template_decl)
+  if (processing_template_decl
+      && (type_dependent_expression_p (cond)
+	  /* For GCC 8 only convert non-dependent condition in a lambda.  */
+	  || !current_lambda_expr ()))
     return cond;
 
-  if (warn_sequence_point)
+  if (warn_sequence_point && !processing_template_decl)
     verify_sequence_points (cond);
 
   /* Do the conversion.  */
@@ -1461,11 +1464,11 @@ finish_compound_stmt (tree stmt)
 /* Finish an asm-statement, whose components are a STRING, some
    OUTPUT_OPERANDS, some INPUT_OPERANDS, some CLOBBERS and some
    LABELS.  Also note whether the asm-statement should be
-   considered volatile.  */
+   considered volatile, and whether it is asm inline.  */
 
 tree
 finish_asm_stmt (int volatile_p, tree string, tree output_operands,
-		 tree input_operands, tree clobbers, tree labels)
+		 tree input_operands, tree clobbers, tree labels, bool inline_p)
 {
   tree r;
   tree t;
@@ -1619,6 +1622,7 @@ finish_asm_stmt (int volatile_p, tree string, tree output_operands,
 		  output_operands, input_operands,
 		  clobbers, labels);
   ASM_VOLATILE_P (r) = volatile_p || noutputs == 0;
+  ASM_INLINE_P (r) = inline_p;
   r = maybe_cleanup_point_expr_void (r);
   return add_stmt (r);
 }
@@ -2098,6 +2102,14 @@ finish_qualified_id_expr (tree qualifying_class,
 	expr = build_offset_ref (qualifying_class, expr, /*address_p=*/false,
 				 complain);
     }
+  else if (!template_p
+	   && TREE_CODE (expr) == TEMPLATE_DECL
+	   && !DECL_FUNCTION_TEMPLATE_P (expr))
+    {
+      if (complain & tf_error)
+	error ("%qE missing template arguments", expr);
+      return error_mark_node;
+    }
   else
     {
       /* In a template, return a SCOPE_REF for most qualified-ids
@@ -2113,6 +2125,8 @@ finish_qualified_id_expr (tree qualifying_class,
 	expr = build_qualified_name (TREE_TYPE (expr),
 				     qualifying_class, expr,
 				     template_p);
+      else if (tree wrap = maybe_get_tls_wrapper_call (expr))
+	expr = wrap;
 
       expr = convert_from_reference (expr);
     }
@@ -2704,13 +2718,14 @@ finish_unary_op_expr (location_t op_loc, enum tree_code code, cp_expr expr,
   /* TODO: build_x_unary_op doesn't always honor the location.  */
   result.set_location (combined_loc);
 
-  tree result_ovl, expr_ovl;
+  if (result == error_mark_node)
+    return result;
 
   if (!(complain & tf_warning))
     return result;
 
-  result_ovl = result;
-  expr_ovl = expr;
+  tree result_ovl = result;
+  tree expr_ovl = expr;
 
   if (!processing_template_decl)
     expr_ovl = cp_fully_fold (expr_ovl);
@@ -3413,10 +3428,9 @@ process_outer_var_ref (tree decl, tsubst_flags_t complain, bool odr_use)
     }
 
   /* In a lambda within a template, wait until instantiation
-     time to implicitly capture.  */
+     time to implicitly capture a dependent type.  */
   if (context == containing_function
-      && DECL_TEMPLATE_INFO (containing_function)
-      && uses_template_parms (DECL_TI_ARGS (containing_function)))
+      && dependent_type_p (TREE_TYPE (decl)))
     return decl;
 
   if (lambda_expr && VAR_P (decl)
@@ -3708,18 +3722,10 @@ finish_id_expression (tree id_expression,
 	  *non_integral_constant_expression_p = true;
 	}
 
-      tree wrap;
-      if (VAR_P (decl)
-	  && !cp_unevaluated_operand
-	  && !processing_template_decl
-	  && (TREE_STATIC (decl) || DECL_EXTERNAL (decl))
-	  && CP_DECL_THREAD_LOCAL_P (decl)
-	  && (wrap = get_tls_wrapper_fn (decl)))
-	{
-	  /* Replace an evaluated use of the thread_local variable with
-	     a call to its wrapper.  */
-	  decl = build_cxx_call (wrap, 0, NULL, tf_warning_or_error);
-	}
+      if (tree wrap = maybe_get_tls_wrapper_call (decl))
+	/* Replace an evaluated use of the thread_local variable with
+	   a call to its wrapper.  */
+	decl = wrap;
       else if (TREE_CODE (decl) == TEMPLATE_ID_EXPR
 	       && !dependent_p
 	       && variable_template_p (TREE_OPERAND (decl, 0)))
@@ -3783,9 +3789,10 @@ finish_id_expression (tree id_expression,
 	    return error_mark_node;
 
 	  if (!template_arg_p
-	      && TREE_CODE (first_fn) == FUNCTION_DECL
-	      && DECL_FUNCTION_MEMBER_P (first_fn)
-	      && !shared_member_p (decl))
+	      && (TREE_CODE (first_fn) == USING_DECL
+		  || (TREE_CODE (first_fn) == FUNCTION_DECL
+		      && DECL_FUNCTION_MEMBER_P (first_fn)
+		      && !shared_member_p (decl))))
 	    {
 	      /* A set of member functions.  */
 	      decl = maybe_dummy_object (DECL_CONTEXT (first_fn), 0);
@@ -4263,7 +4270,12 @@ expand_or_defer_fn_1 (tree fn)
   /* There's no reason to do any of the work here if we're only doing
      semantic analysis; this code just generates RTL.  */
   if (flag_syntax_only)
-    return false;
+    {
+      /* Pretend that this function has been written out so that we don't try
+	 to expand it again.  */
+      TREE_ASM_WRITTEN (fn) = 1;
+      return false;
+    }
 
   return true;
 }
@@ -7303,7 +7315,8 @@ finish_omp_clauses (tree clauses, enum c_omp_region_type ort)
 	  t = require_complete_type (t);
 	  if (t == error_mark_node)
 	    remove = true;
-	  else if (TREE_CODE (TREE_TYPE (t)) == REFERENCE_TYPE
+	  else if (!processing_template_decl
+		   && TREE_CODE (TREE_TYPE (t)) == REFERENCE_TYPE
 		   && !complete_type_or_else (TREE_TYPE (TREE_TYPE (t)), t))
 	    remove = true;
 	}
@@ -8450,6 +8463,11 @@ finish_omp_atomic (enum tree_code code, enum tree_code opcode, tree lhs,
       stmt = build2 (OMP_ATOMIC, void_type_node, integer_zero_node, stmt);
       OMP_ATOMIC_SEQ_CST (stmt) = seq_cst;
     }
+
+  /* Avoid -Wunused-value warnings here, the whole construct has side-effects
+     and even if it might be wrapped from fold-const.c or c-omp.c wrapped
+     in some tree that appears to be unused, the value is not unused.  */
+  warning_sentinel w (warn_unused_value);
   finish_expr_stmt (stmt);
 }
 
@@ -8516,10 +8534,13 @@ finish_omp_cancel (tree clauses)
   tree ifc = omp_find_clause (clauses, OMP_CLAUSE_IF);
   if (ifc != NULL_TREE)
     {
-      tree type = TREE_TYPE (OMP_CLAUSE_IF_EXPR (ifc));
-      ifc = fold_build2_loc (OMP_CLAUSE_LOCATION (ifc), NE_EXPR,
-			     boolean_type_node, OMP_CLAUSE_IF_EXPR (ifc),
-			     build_zero_cst (type));
+      if (!processing_template_decl)
+	ifc = maybe_convert_cond (OMP_CLAUSE_IF_EXPR (ifc));
+      else
+	ifc = build_x_binary_op (OMP_CLAUSE_LOCATION (ifc), NE_EXPR,
+				 OMP_CLAUSE_IF_EXPR (ifc), ERROR_MARK,
+				 integer_zero_node, ERROR_MARK,
+				 NULL, tf_warning_or_error);
     }
   else
     ifc = boolean_true_node;

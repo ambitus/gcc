@@ -2163,13 +2163,33 @@ next_arg:;
 	  if (TYPE_NAME (TREE_TYPE (newdecl)) == newdecl)
 	    {
 	      tree remove = TREE_TYPE (newdecl);
-	      for (tree t = TYPE_MAIN_VARIANT (remove); ;
-		   t = TYPE_NEXT_VARIANT (t))
-		if (TYPE_NEXT_VARIANT (t) == remove)
-		  {
-		    TYPE_NEXT_VARIANT (t) = TYPE_NEXT_VARIANT (remove);
-		    break;
-		  }
+	      if (TYPE_MAIN_VARIANT (remove) == remove)
+		{
+		  gcc_assert (TYPE_NEXT_VARIANT (remove) == NULL_TREE);
+		  /* If remove is the main variant, no need to remove that
+		     from the list.  One of the DECL_ORIGINAL_TYPE
+		     variants, e.g. created for aligned attribute, might still
+		     refer to the newdecl TYPE_DECL though, so remove that one
+		     in that case.  */
+		  if (tree orig = DECL_ORIGINAL_TYPE (newdecl))
+		    if (orig != remove)
+		      for (tree t = TYPE_MAIN_VARIANT (orig); t;
+			   t = TYPE_MAIN_VARIANT (t))
+			if (TYPE_NAME (TYPE_NEXT_VARIANT (t)) == newdecl)
+			  {
+			    TYPE_NEXT_VARIANT (t)
+			      = TYPE_NEXT_VARIANT (TYPE_NEXT_VARIANT (t));
+			    break;
+			  }
+		}	    
+	      else
+		for (tree t = TYPE_MAIN_VARIANT (remove); ;
+		     t = TYPE_NEXT_VARIANT (t))
+		  if (TYPE_NEXT_VARIANT (t) == remove)
+		    {
+		      TYPE_NEXT_VARIANT (t) = TYPE_NEXT_VARIANT (remove);
+		      break;
+		    }
 	    }
 	}
       else if (merge_attr)
@@ -5616,6 +5636,7 @@ maybe_commonize_var (tree decl)
 		 be merged.  */
 	      TREE_PUBLIC (decl) = 0;
 	      DECL_COMMON (decl) = 0;
+	      DECL_INTERFACE_KNOWN (decl) = 1;
 	      const char *msg;
 	      if (DECL_INLINE_VAR_P (decl))
 		msg = G_("sorry: semantics of inline variable "
@@ -6134,20 +6155,29 @@ reshape_init_r (tree type, reshape_iter *d, bool first_initializer_p,
     {
       if (TREE_CODE (init) == CONSTRUCTOR)
 	{
-	  if (TREE_TYPE (init) && TYPE_PTRMEMFUNC_P (TREE_TYPE (init)))
-	    /* There is no need to reshape pointer-to-member function
-	       initializers, as they are always constructed correctly
-	       by the front end.  */
-           ;
-	  else if (COMPOUND_LITERAL_P (init))
+	  tree init_type = TREE_TYPE (init);
+	  if (init_type && TYPE_PTRMEMFUNC_P (init_type))
+	    /* There is no need to call reshape_init for pointer-to-member
+	       function initializers, as they are always constructed correctly
+	       by the front end.  Here we have e.g. {.__pfn=0B, .__delta=0},
+	       which is missing outermost braces.  We should warn below, and
+	       one of the routines below will wrap it in additional { }.  */;
 	  /* For a nested compound literal, there is no need to reshape since
-	     brace elision is not allowed. Even if we decided to allow it,
-	     we should add a call to reshape_init in finish_compound_literal,
-	     before calling digest_init, so changing this code would still
-	     not be necessary.  */
-	    gcc_assert (!BRACE_ENCLOSED_INITIALIZER_P (init));
+	     we called reshape_init in finish_compound_literal, before calling
+	     digest_init.  */
+	  else if (COMPOUND_LITERAL_P (init)
+		   /* Similarly, a CONSTRUCTOR of the target's type is a
+		      previously digested initializer.  */
+		   || same_type_ignoring_top_level_qualifiers_p (type,
+								 init_type))
+	    {
+	      ++d->cur;
+	      gcc_assert (!BRACE_ENCLOSED_INITIALIZER_P (init));
+	      return init;
+	    }
 	  else
 	    {
+	      /* Something that hasn't been reshaped yet.  */
 	      ++d->cur;
 	      gcc_assert (BRACE_ENCLOSED_INITIALIZER_P (init));
 	      return reshape_init (type, init, complain);
@@ -8317,14 +8347,14 @@ expand_static_init (tree decl, tree init)
 	      (acquire_name, build_function_type_list (integer_type_node,
 						       TREE_TYPE (guard_addr),
 						       NULL_TREE),
-	       NULL_TREE, ECF_NOTHROW | ECF_LEAF);
+	       NULL_TREE, ECF_NOTHROW);
 	  if (!release_fn || !abort_fn)
 	    vfntype = build_function_type_list (void_type_node,
 						TREE_TYPE (guard_addr),
 						NULL_TREE);
 	  if (!release_fn)
 	    release_fn = push_library_fn (release_name, vfntype, NULL_TREE,
-					   ECF_NOTHROW | ECF_LEAF);
+					  ECF_NOTHROW);
 	  if (!abort_fn)
 	    abort_fn = push_library_fn (abort_name, vfntype, NULL_TREE,
 					ECF_NOTHROW | ECF_LEAF);
@@ -15557,6 +15587,18 @@ begin_destructor_body (void)
 	    tree stmt = cp_build_modify_expr (input_location, vtbl_ptr,
 					      NOP_EXPR, vtbl,
 					      tf_warning_or_error);
+	    /* If the vptr is shared with some virtual nearly empty base,
+	       don't clear it if not in charge, the dtor of the virtual
+	       nearly empty base will do that later.  */
+	    if (CLASSTYPE_VBASECLASSES (current_class_type)
+		&& CLASSTYPE_PRIMARY_BINFO (current_class_type)
+		&& BINFO_VIRTUAL_P
+			  (CLASSTYPE_PRIMARY_BINFO (current_class_type)))
+	      {
+		stmt = convert_to_void (stmt, ICV_STATEMENT,
+					tf_warning_or_error);
+		stmt = build_if_in_charge (stmt);
+	      }
 	    finish_decl_cleanup (NULL_TREE, stmt);
 	  }
 	else

@@ -1099,6 +1099,31 @@ convert_elseif (gfc_code **c, int *walk_subtrees ATTRIBUTE_UNUSED,
   return 0;
 }
 
+/* Callback function to var_in_expr - return true if expr1 and
+   expr2 are identical variables. */
+static int
+var_in_expr_callback (gfc_expr **e, int *walk_subtrees ATTRIBUTE_UNUSED,
+		      void *data)
+{
+  gfc_expr *expr1 = (gfc_expr *) data;
+  gfc_expr *expr2 = *e;
+
+  if (expr2->expr_type != EXPR_VARIABLE)
+    return 0;
+
+  return expr1->symtree->n.sym == expr2->symtree->n.sym;
+}
+
+/* Return true if expr1 is found in expr2. */
+
+static bool
+var_in_expr (gfc_expr *expr1, gfc_expr *expr2)
+{
+  gcc_assert (expr1->expr_type == EXPR_VARIABLE);
+
+  return gfc_expr_walker (&expr2, var_in_expr_callback, (void *) expr1);
+}
+
 struct do_stack
 {
   struct do_stack *prev;
@@ -1251,9 +1276,9 @@ traverse_io_block (gfc_code *code, bool *has_reached, gfc_code *prev)
 	  for (int j = i - 1; j < i; j++)
 	    {
 	      if (iters[j]
-		  && (gfc_check_dependency (var, iters[j]->start, true)
-		      || gfc_check_dependency (var, iters[j]->end, true)
-		      || gfc_check_dependency (var, iters[j]->step, true)))
+		  && (var_in_expr (var, iters[j]->start)
+		      || var_in_expr (var, iters[j]->end)
+		      || var_in_expr (var, iters[j]->step)))
 		  return false;
 	    }		  
 	}
@@ -1691,6 +1716,10 @@ combine_array_constructor (gfc_expr *e)
   if (iterator_level > 0)
     return false;
 
+  /* WHERE also doesn't work.  */
+  if (in_where > 0)
+    return false;
+
   op1 = e->value.op.op1;
   op2 = e->value.op.op2;
 
@@ -1777,84 +1806,6 @@ combine_array_constructor (gfc_expr *e)
   return true;
 }
 
-/* Change (-1)**k into 1-ishift(iand(k,1),1) and
- 2**k into ishift(1,k) */
-
-static bool
-optimize_power (gfc_expr *e)
-{
-  gfc_expr *op1, *op2;
-  gfc_expr *iand, *ishft;
-
-  if (e->ts.type != BT_INTEGER)
-    return false;
-
-  op1 = e->value.op.op1;
-
-  if (op1 == NULL || op1->expr_type != EXPR_CONSTANT)
-    return false;
-
-  if (mpz_cmp_si (op1->value.integer, -1L) == 0)
-    {
-      gfc_free_expr (op1);
-
-      op2 = e->value.op.op2;
-
-      if (op2 == NULL)
-	return false;
-
-      iand = gfc_build_intrinsic_call (current_ns, GFC_ISYM_IAND,
-				       "_internal_iand", e->where, 2, op2,
-				       gfc_get_int_expr (e->ts.kind,
-							 &e->where, 1));
-
-      ishft = gfc_build_intrinsic_call (current_ns, GFC_ISYM_ISHFT,
-					"_internal_ishft", e->where, 2, iand,
-					gfc_get_int_expr (e->ts.kind,
-							  &e->where, 1));
-
-      e->value.op.op = INTRINSIC_MINUS;
-      e->value.op.op1 = gfc_get_int_expr (e->ts.kind, &e->where, 1);
-      e->value.op.op2 = ishft;
-      return true;
-    }
-  else if (mpz_cmp_si (op1->value.integer, 2L) == 0)
-    {
-      gfc_free_expr (op1);
-
-      op2 = e->value.op.op2;
-      if (op2 == NULL)
-	return false;
-
-      ishft = gfc_build_intrinsic_call (current_ns, GFC_ISYM_ISHFT,
-					"_internal_ishft", e->where, 2,
-					gfc_get_int_expr (e->ts.kind,
-							  &e->where, 1),
-					op2);
-      *e = *ishft;
-      return true;
-    }
-
-  else if (mpz_cmp_si (op1->value.integer, 1L) == 0)
-    {
-      op2 = e->value.op.op2;
-      if (op2 == NULL)
-	return false;
-
-      gfc_free_expr (op1);
-      gfc_free_expr (op2);
-
-      e->expr_type = EXPR_CONSTANT;
-      e->value.op.op1 = NULL;
-      e->value.op.op2 = NULL;
-      mpz_init_set_si (e->value.integer, 1);
-      /* Typespec and location are still OK.  */
-      return true;
-    }
-
-  return false;
-}
-
 /* Recursive optimization of operators.  */
 
 static bool
@@ -1914,9 +1865,6 @@ optimize_op (gfc_expr *e)
     case INTRINSIC_TIMES:
     case INTRINSIC_DIVIDE:
       return combine_array_constructor (e) || changed;
-
-    case INTRINSIC_POWER:
-      return optimize_power (e);
 
     default:
       break;
@@ -2513,7 +2461,12 @@ insert_index (gfc_expr *e, gfc_symbol *sym, mpz_t val, mpz_t ret)
   data.sym = sym;
   mpz_init_set (data.val, val);
   gfc_expr_walker (&n, callback_insert_index, (void *) &data);
+
+  /* Suppress errors here - we could get errors here such as an
+     out of bounds access for arrays, see PR 90563.  */
+  gfc_push_suppress_errors ();
   gfc_simplify_expr (n, 0);
+  gfc_pop_suppress_errors ();
 
   if (n->expr_type == EXPR_CONSTANT)
     {
@@ -2563,6 +2516,7 @@ do_subscript (gfc_expr **e)
 	      bool have_do_start, have_do_end;
 	      bool error_not_proven;
 	      int warn;
+	      int sgn;
 
 	      dl = lp->c;
 	      if (dl == NULL)
@@ -2591,7 +2545,16 @@ do_subscript (gfc_expr **e)
 		 Do not warn in this case.  */
 	  
 	      if (dl->ext.iterator->step->expr_type == EXPR_CONSTANT)
-		mpz_init_set (do_step, dl->ext.iterator->step->value.integer);
+		{
+		  sgn = mpz_cmp_ui (dl->ext.iterator->step->value.integer, 0);
+		  /* This can happen, but then the error has been
+		     reported previusly.  */
+		  if (sgn == 0)
+		    continue;
+
+		  mpz_init_set (do_step, dl->ext.iterator->step->value.integer);
+		}
+
 	      else
 		continue;
 
@@ -2614,6 +2577,16 @@ do_subscript (gfc_expr **e)
 
 	      if (!have_do_start && !have_do_end)
 		return 0;
+
+	      /* No warning inside a zero-trip loop.  */
+	      if (have_do_start && have_do_end)
+		{
+		  int cmp;
+
+		  cmp = mpz_cmp (do_end, do_start);
+		  if ((sgn > 0 && cmp < 0) || (sgn < 0 && cmp > 0))
+		    break;
+		}
 
 	      /* May have to correct the end value if the step does not equal
 		 one.  */

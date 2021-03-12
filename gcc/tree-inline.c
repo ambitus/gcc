@@ -578,6 +578,92 @@ remap_type_1 (tree type, copy_body_data *id)
   return new_tree;
 }
 
+/* Helper function for remap_type_2, called through walk_tree.  */
+
+static tree
+remap_type_3 (tree *tp, int *walk_subtrees, void *data)
+{
+  copy_body_data *id = (copy_body_data *) data;
+
+  if (TYPE_P (*tp))
+    *walk_subtrees = 0;
+
+  else if (DECL_P (*tp) && remap_decl (*tp, id) != *tp)
+    return *tp;
+
+  return NULL_TREE;
+}
+
+/* Return true if TYPE needs to be remapped because remap_decl on any
+   needed embedded decl returns something other than that decl.  */
+
+static bool
+remap_type_2 (tree type, copy_body_data *id)
+{
+  tree t;
+
+#define RETURN_TRUE_IF_VAR(T) \
+  do								\
+    {								\
+      tree _t = (T);						\
+      if (_t)							\
+	{							\
+	  if (DECL_P (_t) && remap_decl (_t, id) != _t)		\
+	    return true;					\
+	  if (!TYPE_SIZES_GIMPLIFIED (type)			\
+	      && walk_tree (&_t, remap_type_3, id, NULL))	\
+	    return true;					\
+	}							\
+    }								\
+  while (0)
+
+  switch (TREE_CODE (type))
+    {
+    case POINTER_TYPE:
+    case REFERENCE_TYPE:
+    case FUNCTION_TYPE:
+    case METHOD_TYPE:
+      return remap_type_2 (TREE_TYPE (type), id);
+
+    case INTEGER_TYPE:
+    case REAL_TYPE:
+    case FIXED_POINT_TYPE:
+    case ENUMERAL_TYPE:
+    case BOOLEAN_TYPE:
+      RETURN_TRUE_IF_VAR (TYPE_MIN_VALUE (type));
+      RETURN_TRUE_IF_VAR (TYPE_MAX_VALUE (type));
+      return false;
+
+    case ARRAY_TYPE:
+      if (remap_type_2 (TREE_TYPE (type), id)
+	  || (TYPE_DOMAIN (type) && remap_type_2 (TYPE_DOMAIN (type), id)))
+	return true;
+      break;
+
+    case RECORD_TYPE:
+    case UNION_TYPE:
+    case QUAL_UNION_TYPE:
+      for (t = TYPE_FIELDS (type); t; t = DECL_CHAIN (t))
+	if (TREE_CODE (t) == FIELD_DECL)
+	  {
+	    RETURN_TRUE_IF_VAR (DECL_FIELD_OFFSET (t));
+	    RETURN_TRUE_IF_VAR (DECL_SIZE (t));
+	    RETURN_TRUE_IF_VAR (DECL_SIZE_UNIT (t));
+	    if (TREE_CODE (type) == QUAL_UNION_TYPE)
+	      RETURN_TRUE_IF_VAR (DECL_QUALIFIER (t));
+	  }
+      break;
+
+    default:
+      return false;
+    }
+
+  RETURN_TRUE_IF_VAR (TYPE_SIZE (type));
+  RETURN_TRUE_IF_VAR (TYPE_SIZE_UNIT (type));
+  return false;
+#undef RETURN_TRUE_IF_VAR
+}
+
 tree
 remap_type (tree type, copy_body_data *id)
 {
@@ -593,7 +679,10 @@ remap_type (tree type, copy_body_data *id)
     return *node;
 
   /* The type only needs remapping if it's variably modified.  */
-  if (! variably_modified_type_p (type, id->src_fn))
+  if (! variably_modified_type_p (type, id->src_fn)
+      /* Don't remap if copy_decl method doesn't always return a new
+	 decl and for all embedded decls returns the passed in decl.  */
+      || (id->dont_remap_vla_if_no_change && !remap_type_2 (type, id)))
     {
       insert_decl_map (id, type, type);
       return type;
@@ -868,7 +957,12 @@ remap_dependence_clique (copy_body_data *id, unsigned short clique)
   bool existed;
   unsigned short &newc = id->dependence_map->get_or_insert (clique, &existed);
   if (!existed)
-    newc = ++cfun->last_clique;
+    {
+      /* Clique 1 is reserved for local ones set by PTA.  */
+      if (cfun->last_clique == 0)
+	cfun->last_clique = 1;
+      newc = ++cfun->last_clique;
+    }
   return newc;
 }
 
@@ -1961,8 +2055,7 @@ copy_bb (copy_body_data *id, basic_block bb,
 		   && id->call_stmt
 		   && (decl = gimple_call_fndecl (stmt))
 		   && DECL_BUILT_IN_CLASS (decl) == BUILT_IN_NORMAL
-		   && DECL_FUNCTION_CODE (decl) == BUILT_IN_VA_ARG_PACK_LEN
-		   && ! gimple_call_va_arg_pack_p (id->call_stmt))
+		   && DECL_FUNCTION_CODE (decl) == BUILT_IN_VA_ARG_PACK_LEN)
 	    {
 	      /* __builtin_va_arg_pack_len () should be replaced by
 		 the number of anonymous arguments.  */
@@ -1980,10 +2073,28 @@ copy_bb (copy_body_data *id, basic_block bb,
 		if (POINTER_BOUNDS_P (gimple_call_arg (id->call_stmt, i)))
 		  nargs--;
 
-	      count = build_int_cst (integer_type_node, nargs);
-	      new_stmt = gimple_build_assign (gimple_call_lhs (stmt), count);
-	      gsi_replace (&copy_gsi, new_stmt, false);
-	      stmt = new_stmt;
+	      if (!gimple_call_lhs (stmt))
+		{
+		  /* Drop unused calls.  */
+		  gsi_remove (&copy_gsi, false);
+		  continue;
+		}
+	      else if (!gimple_call_va_arg_pack_p (id->call_stmt))
+		{
+		  count = build_int_cst (integer_type_node, nargs);
+		  new_stmt = gimple_build_assign (gimple_call_lhs (stmt), count);
+		  gsi_replace (&copy_gsi, new_stmt, false);
+		  stmt = new_stmt;
+		}
+	      else if (nargs != 0)
+		{
+		  tree newlhs = create_tmp_reg_or_ssa_name (integer_type_node);
+		  count = build_int_cst (integer_type_node, nargs);
+		  new_stmt = gimple_build_assign (gimple_call_lhs (stmt),
+						  PLUS_EXPR, newlhs, count);
+		  gimple_call_set_lhs (stmt, newlhs);
+		  gsi_insert_after (&copy_gsi, new_stmt, GSI_NEW_STMT);
+		}
 	    }
 	  else if (call_stmt
 		   && id->call_stmt
@@ -2634,7 +2745,11 @@ copy_loops (copy_body_data *id,
 	      dest_loop->simduid = remap_decl (src_loop->simduid, id);
 	      cfun->has_simduid_loops = true;
 	    }
-
+	  if (id->src_cfun->last_clique != 0)
+	    dest_loop->owned_clique
+	      = remap_dependence_clique (id,
+					 src_loop->owned_clique
+					 ? src_loop->owned_clique : 1);
 	  /* Recurse.  */
 	  copy_loops (id, dest_loop, src_loop);
 	}
@@ -4132,6 +4247,9 @@ estimate_num_insns (gimple *stmt, eni_weights *weights)
 	   with very long asm statements.  */
 	if (count > 1000)
 	  count = 1000;
+	/* If this asm is asm inline, count anything as minimum size.  */
+	if (gimple_asm_inline_p (as_a <gasm *> (stmt)))
+	  count = MIN (1, count);
 	return MAX (1, count);
       }
 
@@ -4552,10 +4670,16 @@ expand_call_inline (basic_block bb, gimple *stmt, copy_body_data *id)
      not refer to them in any way to not break GC for locations.  */
   if (gimple_block (stmt))
     {
+      /* We do want to assign a not UNKNOWN_LOCATION BLOCK_SOURCE_LOCATION
+         to make inlined_function_outer_scope_p return true on this BLOCK.  */
+      location_t loc = LOCATION_LOCUS (gimple_location (stmt));
+      if (loc == UNKNOWN_LOCATION)
+	loc = LOCATION_LOCUS (DECL_SOURCE_LOCATION (fn));
+      if (loc == UNKNOWN_LOCATION)
+	loc = BUILTINS_LOCATION;
       id->block = make_node (BLOCK);
       BLOCK_ABSTRACT_ORIGIN (id->block) = fn;
-      BLOCK_SOURCE_LOCATION (id->block) 
-	= LOCATION_LOCUS (gimple_location (stmt));
+      BLOCK_SOURCE_LOCATION (id->block) = loc;
       prepend_lexical_block (gimple_block (stmt), id->block);
     }
 
@@ -5513,6 +5637,10 @@ copy_decl_for_dup_finish (copy_body_data *id, tree decl, tree copy)
   if (CODE_CONTAINS_STRUCT (TREE_CODE (copy), TS_DECL_WRTL)
       && !TREE_STATIC (copy) && !DECL_EXTERNAL (copy))
     SET_DECL_RTL (copy, 0);
+  /* For vector typed decls make sure to update DECL_MODE according
+     to the new function context.  */
+  if (VECTOR_TYPE_P (TREE_TYPE (copy)))
+    SET_DECL_MODE (copy, TYPE_MODE (TREE_TYPE (copy)));
 
   /* These args would always appear unused, if not for this.  */
   TREE_USED (copy) = 1;

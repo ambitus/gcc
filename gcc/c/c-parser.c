@@ -2143,10 +2143,12 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	      tree d = start_decl (declarator, specs, false,
 				   chainon (postfix_attrs,
 					    all_prefix_attrs));
-	      if (d && TREE_CODE (d) == FUNCTION_DECL)
-		if (declarator->kind == cdk_function)
-		  if (DECL_ARGUMENTS (d) == NULL_TREE)
-		    DECL_ARGUMENTS (d) = declarator->u.arg_info->parms;
+	      if (d
+		  && TREE_CODE (d) == FUNCTION_DECL
+		  && declarator->kind == cdk_function
+		  && DECL_ARGUMENTS (d) == NULL_TREE
+		  && DECL_INITIAL (d) == NULL_TREE)
+		DECL_ARGUMENTS (d) = declarator->u.arg_info->parms;
 	      if (omp_declare_simd_clauses.exists ())
 		{
 		  tree parms = NULL_TREE;
@@ -5931,7 +5933,8 @@ c_parser_while_statement (c_parser *parser, bool ivdep, unsigned short unroll,
   location_t loc_after_labels;
   bool open_brace = c_parser_next_token_is (parser, CPP_OPEN_BRACE);
   body = c_parser_c99_block_statement (parser, if_p, &loc_after_labels);
-  c_finish_loop (loc, cond, NULL, body, c_break_label, c_cont_label, true);
+  c_finish_loop (loc, loc, cond, UNKNOWN_LOCATION, NULL, body,
+		 c_break_label, c_cont_label, true);
   add_stmt (c_end_compound_stmt (loc, block, flag_isoc99));
   c_parser_maybe_reclassify_token (parser);
 
@@ -5976,6 +5979,7 @@ c_parser_do_statement (c_parser *parser, bool ivdep, unsigned short unroll)
   c_break_label = save_break;
   new_cont = c_cont_label;
   c_cont_label = save_cont;
+  location_t cond_loc = c_parser_peek_token (parser)->location;
   cond = c_parser_paren_condition (parser);
   if (ivdep && cond != error_mark_node)
     cond = build3 (ANNOTATE_EXPR, TREE_TYPE (cond), cond,
@@ -5989,7 +5993,8 @@ c_parser_do_statement (c_parser *parser, bool ivdep, unsigned short unroll)
  		   build_int_cst (integer_type_node, unroll));
   if (!c_parser_require (parser, CPP_SEMICOLON, "expected %<;%>"))
     c_parser_skip_to_end_of_block_or_statement (parser);
-  c_finish_loop (loc, cond, NULL, body, new_break, new_cont, false);
+  c_finish_loop (loc, cond_loc, cond, UNKNOWN_LOCATION, NULL, body,
+		 new_break, new_cont, false);
   add_stmt (c_end_compound_stmt (loc, block, flag_isoc99));
 }
 
@@ -6062,7 +6067,9 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
   /* Silence the bogus uninitialized warning.  */
   tree collection_expression = NULL;
   location_t loc = c_parser_peek_token (parser)->location;
-  location_t for_loc = c_parser_peek_token (parser)->location;
+  location_t for_loc = loc;
+  location_t cond_loc = UNKNOWN_LOCATION;
+  location_t incr_loc = UNKNOWN_LOCATION;
   bool is_foreach_statement = false;
   gcc_assert (c_parser_next_token_is_keyword (parser, RID_FOR));
   token_indent_info for_tinfo
@@ -6096,7 +6103,8 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 	      c_parser_consume_token (parser);
 	      is_foreach_statement = true;
 	      if (check_for_loop_decls (for_loc, true) == NULL_TREE)
-		c_parser_error (parser, "multiple iterating variables in fast enumeration");
+		c_parser_error (parser, "multiple iterating variables in "
+					"fast enumeration");
 	    }
 	  else
 	    check_for_loop_decls (for_loc, flag_isoc99);
@@ -6126,7 +6134,8 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 		  c_parser_consume_token (parser);
 		  is_foreach_statement = true;
 		  if (check_for_loop_decls (for_loc, true) == NULL_TREE)
-		    c_parser_error (parser, "multiple iterating variables in fast enumeration");
+		    c_parser_error (parser, "multiple iterating variables in "
+					    "fast enumeration");
 		}
 	      else
 		check_for_loop_decls (for_loc, flag_isoc99);
@@ -6148,15 +6157,18 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 		c_parser_consume_token (parser);
 		is_foreach_statement = true;
 		if (! lvalue_p (init_expression))
-		  c_parser_error (parser, "invalid iterating variable in fast enumeration");
-		object_expression = c_fully_fold (init_expression, false, NULL);
+		  c_parser_error (parser, "invalid iterating variable in "
+					  "fast enumeration");
+		object_expression
+		  = c_fully_fold (init_expression, false, NULL);
 	      }
 	    else
 	      {
 		ce = convert_lvalue_to_rvalue (loc, ce, true, false);
 		init_expression = ce.value;
 		c_finish_expr_stmt (loc, init_expression);
-		c_parser_skip_until_found (parser, CPP_SEMICOLON, "expected %<;%>");
+		c_parser_skip_until_found (parser, CPP_SEMICOLON,
+					   "expected %<;%>");
 	      }
 	  }
 	}
@@ -6165,18 +6177,19 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
       gcc_assert (!parser->objc_could_be_foreach_context);
       if (!is_foreach_statement)
 	{
+	  cond_loc = c_parser_peek_token (parser)->location;
 	  if (c_parser_next_token_is (parser, CPP_SEMICOLON))
 	    {
 	      if (ivdep)
 		{
-		  c_parser_error (parser, "missing loop condition in loop with "
-				  "%<GCC ivdep%> pragma");
+		  c_parser_error (parser, "missing loop condition in loop "
+					  "with %<GCC ivdep%> pragma");
 		  cond = error_mark_node;
 		}
 	      else if (unroll)
 		{
-		  c_parser_error (parser, "missing loop condition in loop with "
-				  "%<GCC unroll%> pragma");
+		  c_parser_error (parser, "missing loop condition in loop "
+					  "with %<GCC unroll%> pragma");
 		  cond = error_mark_node;
 		}
 	      else
@@ -6205,11 +6218,13 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
       /* Parse the increment expression (the third expression in a
 	 for-statement).  In the case of a foreach-statement, this is
 	 the expression that follows the 'in'.  */
+      loc = incr_loc = c_parser_peek_token (parser)->location;
       if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
 	{
 	  if (is_foreach_statement)
 	    {
-	      c_parser_error (parser, "missing collection in fast enumeration");
+	      c_parser_error (parser,
+			      "missing collection in fast enumeration");
 	      collection_expression = error_mark_node;
 	    }
 	  else
@@ -6218,8 +6233,8 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
       else
 	{
 	  if (is_foreach_statement)
-	    collection_expression = c_fully_fold (c_parser_expression (parser).value,
-						  false, NULL);
+	    collection_expression
+	      = c_fully_fold (c_parser_expression (parser).value, false, NULL);
 	  else
 	    {
 	      struct c_expr ce = c_parser_expression (parser);
@@ -6242,10 +6257,14 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
   body = c_parser_c99_block_statement (parser, if_p, &loc_after_labels);
 
   if (is_foreach_statement)
-    objc_finish_foreach_loop (loc, object_expression, collection_expression, body, c_break_label, c_cont_label);
+    objc_finish_foreach_loop (for_loc, object_expression,
+			      collection_expression, body, c_break_label,
+			      c_cont_label);
   else
-    c_finish_loop (loc, cond, incr, body, c_break_label, c_cont_label, true);
-  add_stmt (c_end_compound_stmt (loc, block, flag_isoc99 || c_dialect_objc ()));
+    c_finish_loop (for_loc, cond_loc, cond, incr_loc, incr, body,
+		   c_break_label, c_cont_label, true);
+  add_stmt (c_end_compound_stmt (for_loc, block,
+				 flag_isoc99 || c_dialect_objc ()));
   c_parser_maybe_reclassify_token (parser);
 
   token_indent_info next_tinfo
@@ -6261,60 +6280,103 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 }
 
 /* Parse an asm statement, a GNU extension.  This is a full-blown asm
-   statement with inputs, outputs, clobbers, and volatile tag
-   allowed.
+   statement with inputs, outputs, clobbers, and volatile, inline, and goto
+   tags allowed.
+
+   asm-qualifier:
+     volatile
+     inline
+     goto
+
+   asm-qualifier-list:
+     asm-qualifier-list asm-qualifier
+     asm-qualifier
 
    asm-statement:
-     asm type-qualifier[opt] ( asm-argument ) ;
-     asm type-qualifier[opt] goto ( asm-goto-argument ) ;
+     asm asm-qualifier-list[opt] ( asm-argument ) ;
 
    asm-argument:
      asm-string-literal
      asm-string-literal : asm-operands[opt]
      asm-string-literal : asm-operands[opt] : asm-operands[opt]
-     asm-string-literal : asm-operands[opt] : asm-operands[opt] : asm-clobbers[opt]
-
-   asm-goto-argument:
+     asm-string-literal : asm-operands[opt] : asm-operands[opt] \
+       : asm-clobbers[opt]
      asm-string-literal : : asm-operands[opt] : asm-clobbers[opt] \
        : asm-goto-operands
 
-   Qualifiers other than volatile are accepted in the syntax but
-   warned for.  */
+   The form with asm-goto-operands is valid if and only if the
+   asm-qualifier-list contains goto, and is the only allowed form in that case.
+   Duplicate asm-qualifiers are not allowed.  */
 
 static tree
 c_parser_asm_statement (c_parser *parser)
 {
-  tree quals, str, outputs, inputs, clobbers, labels, ret;
-  bool simple, is_goto;
+  tree str, outputs, inputs, clobbers, labels, ret;
+  bool simple;
   location_t asm_loc = c_parser_peek_token (parser)->location;
   int section, nsections;
 
   gcc_assert (c_parser_next_token_is_keyword (parser, RID_ASM));
   c_parser_consume_token (parser);
-  if (c_parser_next_token_is_keyword (parser, RID_VOLATILE))
-    {
-      quals = c_parser_peek_token (parser)->value;
-      c_parser_consume_token (parser);
-    }
-  else if (c_parser_next_token_is_keyword (parser, RID_CONST)
-	   || c_parser_next_token_is_keyword (parser, RID_RESTRICT))
-    {
-      warning_at (c_parser_peek_token (parser)->location,
-		  0,
-		  "%E qualifier ignored on asm",
-		  c_parser_peek_token (parser)->value);
-      quals = NULL_TREE;
-      c_parser_consume_token (parser);
-    }
-  else
-    quals = NULL_TREE;
 
-  is_goto = false;
-  if (c_parser_next_token_is_keyword (parser, RID_GOTO))
+  /* Handle the asm-qualifier-list.  */
+  location_t volatile_loc = UNKNOWN_LOCATION;
+  location_t inline_loc = UNKNOWN_LOCATION;
+  location_t goto_loc = UNKNOWN_LOCATION;
+  for (;;)
     {
-      c_parser_consume_token (parser);
-      is_goto = true;
+      c_token *token = c_parser_peek_token (parser);
+      location_t loc = token->location;
+      switch (token->keyword)
+	{
+	case RID_VOLATILE:
+	  if (volatile_loc)
+	    {
+	      error_at (loc, "duplicate asm qualifier %qE", token->value);
+	      inform (volatile_loc, "first seen here");
+	    }
+	  else
+	    volatile_loc = loc;
+	  c_parser_consume_token (parser);
+	  continue;
+
+	case RID_INLINE:
+	  if (inline_loc)
+	    {
+	      error_at (loc, "duplicate asm qualifier %qE", token->value);
+	      inform (inline_loc, "first seen here");
+	    }
+	  else
+	    inline_loc = loc;
+	  c_parser_consume_token (parser);
+	  continue;
+
+	case RID_GOTO:
+	  if (goto_loc)
+	    {
+	      error_at (loc, "duplicate asm qualifier %qE", token->value);
+	      inform (goto_loc, "first seen here");
+	    }
+	  else
+	    goto_loc = loc;
+	  c_parser_consume_token (parser);
+	  continue;
+
+	case RID_CONST:
+	case RID_RESTRICT:
+	  warning_at (loc, 0, "%qE is not an asm qualifier", token->value);
+	  c_parser_consume_token (parser);
+	  continue;
+
+	default:
+	  break;
+	}
+      break;
     }
+
+  bool is_volatile = (volatile_loc != UNKNOWN_LOCATION);
+  bool is_inline = (inline_loc != UNKNOWN_LOCATION);
+  bool is_goto = (goto_loc != UNKNOWN_LOCATION);
 
   /* ??? Follow the C++ parser rather than using the
      lex_untranslated_string kludge.  */
@@ -6390,8 +6452,9 @@ c_parser_asm_statement (c_parser *parser)
   if (!c_parser_require (parser, CPP_SEMICOLON, "expected %<;%>"))
     c_parser_skip_to_end_of_block_or_statement (parser);
 
-  ret = build_asm_stmt (quals, build_asm_expr (asm_loc, str, outputs, inputs,
-					       clobbers, labels, simple));
+  ret = build_asm_stmt (is_volatile,
+			build_asm_expr (asm_loc, str, outputs, inputs,
+					clobbers, labels, simple, is_inline));
 
  error:
   parser->lex_untranslated_string = false;
@@ -13786,7 +13849,10 @@ c_parser_omp_clause_dist_schedule (c_parser *parser, tree list)
     c_parser_skip_until_found (parser, CPP_CLOSE_PAREN,
 			       "expected %<,%> or %<)%>");
 
-  check_no_duplicate_clause (list, OMP_CLAUSE_SCHEDULE, "schedule");
+  /* check_no_duplicate_clause (list, OMP_CLAUSE_DIST_SCHEDULE,
+				"dist_schedule"); */
+  if (omp_find_clause (list, OMP_CLAUSE_DIST_SCHEDULE))
+    warning_at (loc, 0, "too many %qs clauses", "dist_schedule");
   if (t == error_mark_node)
     return list;
 
@@ -18415,6 +18481,8 @@ c_parse_file (void)
 
   if (c_parser_peek_token (&tparser)->pragma_kind == PRAGMA_GCC_PCH_PREPROCESS)
     c_parser_pragma_pch_preprocess (&tparser);
+  else
+    c_common_no_more_pch ();
 
   the_parser = ggc_alloc<c_parser> ();
   *the_parser = tparser;

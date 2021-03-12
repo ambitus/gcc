@@ -211,7 +211,12 @@ vr_values::update_value_range (const_tree var, value_range *new_vr)
 	 the same.  We may not have is_new when transitioning to
 	 UNDEFINED.  If old_vr->type is VARYING, we shouldn't be
 	 called.  */
-      if (new_vr->type == VR_UNDEFINED)
+      if (old_vr->type == VR_VARYING)
+	{
+	  set_value_range_to_varying (new_vr);
+	  is_new = false;
+	}
+      else if (new_vr->type == VR_UNDEFINED)
 	{
 	  BITMAP_FREE (new_vr->equiv);
 	  set_value_range_to_varying (old_vr);
@@ -2901,7 +2906,9 @@ vr_values::extract_range_from_phi_node (gphi *phi, value_range *vr_result)
       if (cmp_min < 0)
 	vr_result->min = lhs_vr->min;
       else if (cmp_min > 0
-	       && !vrp_val_is_min (vr_result->min))
+	       && (TREE_CODE (vr_result->min) != INTEGER_CST
+		   || tree_int_cst_lt (vrp_val_min (TREE_TYPE (vr_result->min)),
+				       vr_result->min)))
 	vr_result->min
 	  = int_const_binop (PLUS_EXPR,
 			     vrp_val_min (TREE_TYPE (vr_result->min)),
@@ -2911,7 +2918,9 @@ vr_values::extract_range_from_phi_node (gphi *phi, value_range *vr_result)
       if (cmp_max > 0)
 	vr_result->max = lhs_vr->max;
       else if (cmp_max < 0
-	       && !vrp_val_is_max (vr_result->max))
+	       && (TREE_CODE (vr_result->max) != INTEGER_CST
+		   || tree_int_cst_lt (vr_result->max,
+				       vrp_val_max (TREE_TYPE (vr_result->min)))))
 	vr_result->max
 	  = int_const_binop (MINUS_EXPR,
 			     vrp_val_max (TREE_TYPE (vr_result->min)),

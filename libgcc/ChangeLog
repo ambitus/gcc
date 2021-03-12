@@ -1,3 +1,117 @@
+2019-11-17  John David Anglin  <danglin@gcc.gnu.org>
+
+	* config/pa/linux-atomic.c (__kernel_cmpxchg): Change argument 1 to
+	volatile void *.  Remove trap check.
+	(__kernel_cmpxchg2): Likewise.
+	(FETCH_AND_OP_2): Adjust operand types.
+	(OP_AND_FETCH_2): Likewise.
+	(FETCH_AND_OP_WORD): Likewise.
+	(OP_AND_FETCH_WORD): Likewise.
+	(COMPARE_AND_SWAP_2): Likewise.
+	(__sync_val_compare_and_swap_4): Likewise.
+	(__sync_bool_compare_and_swap_4): Likewise.
+	(SYNC_LOCK_TEST_AND_SET_2): Likewise.
+	(__sync_lock_test_and_set_4): Likewise.
+	(SYNC_LOCK_RELEASE_1): Likewise.  Use __kernel_cmpxchg2 for release.
+	(__sync_lock_release_4): Adjust operand types.  Use __kernel_cmpxchg
+	for release.
+	(__sync_lock_release_8): Remove.
+
+2019-11-04  John David Anglin  <danglin@gcc.gnu.org>
+
+	Backport from mainline
+	2019-10-12  John David Anglin  <danglin@gcc.gnu.org>
+
+	* config/pa/lib2funcs.S (__gcc_plt_call): Load branch target to %r21.
+	Load PIC register after branch target.  Fix white space.
+	* config/pa/milli64.S ($$dyncall): Separate LINUX and non LINUX
+	implementations.  Load PIC register after branch target.  Don't
+	clobber function pointer when it points to function descriptor.
+	Use nullification instead of branch in LINUX implementation.
+
+2019-11-04  John David Anglin  <danglin@gcc.gnu.org>
+
+	Backport from mainline
+	2019-10-15  John David Anglin  <danglin@gcc.gnu.org>
+
+	* config/pa/fptr.c (_dl_read_access_allowed): Change argument to
+	unsigned int.  Adjust callers.
+	(__canonicalize_funcptr_for_compare): Change plabel type to volatile
+	unsigned int *.  Load relocation offset before function pointer.
+	Add barrier to ensure ordering.
+
+2019-10-31  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backport from mainline.
+	2019-07-03  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* config.host (powerpc-*-darwin*,powerpc64-*-darwin*): Revise crt
+	list.
+	* config/rs6000/t-darwin: Build crt3_2 for older systems.  Revise
+	mmacosx-version-min for crts to run across all system versions.
+	* config/rs6000/t-darwin64 (LIB2ADD): Remove.
+	* config/t-darwin: Revise mmacosx-version-min for crts to run across
+	system versions >= 10.4.
+
+2019-10-31  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backport from mainline.
+	2019-06-25  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* config.host: Add libef_ppc.a to the extra files for powerpc-darwin.
+	* config/rs6000/t-darwin: (PPC_ENDFILE_SRC, PPC_ENDFILE_OBJS): New.
+	Build objects for the out of line save/restore register functions
+	so that they can be used for any supported Darwin version.
+	* config/t-darwin: Default the build Darwin version to Darwin8
+	(MacOS 10.4).
+
+2019-08-27  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backport from mainline.
+	2019-06-06  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* config/rs6000/t-darwin: Ensure that the unwinder is built with
+	altivec enabled.
+
+2019-08-11  Iain Sandoe  <iain@sandoe.co.uk>
+
+	Backport from mainline.
+	2019-05-12  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* config/rs6000/darwin-vecsave.S: Set .machine appropriately.
+
+2019-02-22  Release Manager
+
+	* GCC 8.3.0 released.
+
+2019-02-19  Uroš Bizjak  <ubizjak@gmail.com>
+
+	* unwind-dw2.c (_Unwind_GetGR) [DWARF_ZERO_REG]: Compare
+	regno instead of index to DWARF_ZERO_REG.
+
+2018-10-03  H.J. Lu  <hongjiu.lu@intel.com>
+
+	Backport from mainline
+	2018-07-27  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR libgcc/85334
+	* config/i386/shadow-stack-unwind.h (_Unwind_Frames_Increment):
+
+2018-08-17  John David Anglin  <danglin@gcc.gnu.org>
+
+	Backport from mainline
+	2018-08-11  John David Anglin  <danglin@gcc.gnu.org>
+
+	* config/pa/linux-atomic.c: Update comment.
+	(FETCH_AND_OP_2, OP_AND_FETCH_2, FETCH_AND_OP_WORD, OP_AND_FETCH_WORD,
+	COMPARE_AND_SWAP_2, __sync_val_compare_and_swap_4,
+	SYNC_LOCK_TEST_AND_SET_2, __sync_lock_test_and_set_4): Use
+	__ATOMIC_RELAXED for atomic loads.
+	(SYNC_LOCK_RELEASE_1): New define.  Use __sync_synchronize() and
+	unordered store to release lock.
+	(__sync_lock_release_8): Likewise.
+	(SYNC_LOCK_RELEASE_2): Remove define.
+
 2018-07-26  Release Manager
 
 	* GCC 8.2.0 released.
@@ -154,7 +268,7 @@
 
 	* config/pa/fptr.c (_dl_read_access_allowed): New.
 	(__canonicalize_funcptr_for_compare): Use it.
-	
+
 2018-02-28  Jakub Jelinek  <jakub@redhat.com>
 
 	PR debug/83917
@@ -251,21 +365,21 @@
 	* config/rl78/t-rl78: Added smindi3.S to LIB2ADD.
 
 2018-01-22  Sebastian Perta  <sebastian.perta@renesas.com>
- 
+
 	* config/rl78/smaxdi3.S: New assembly file.
 	* config/rl78/t-rl78: Added smaxdi3.S to LIB2ADD.
 
 2018-01-22  Sebastian Perta  <sebastian.perta@renesas.com>
- 
+
 	* config/rl78/umaxdi3.S: New assembly file.
 	* config/rl78/t-rl78: Added umaxdi3.S to LIB2ADD.
-	
+
 2018-01-21  John David Anglin  <danglin@gcc.gnu.org>
 
 	PR lto/83452
 	* config/pa/stublib.c (L_gnu_lto_v1): New stub definition.
 	* config/pa/t-stublib (gnu_lto_v1-stub.o): Add make fragment.
-	
+
 2018-01-13  Richard Sandiford  <richard.sandiford@linaro.org>
 
 	* config/aarch64/value-unwind.h (aarch64_vg): New function.
@@ -575,8 +689,8 @@
 	config/i386/enable-execute-stack-mingw32.c
 
 2017-08-01  Jerome Lambourg  <lambourg@adacore.com>
-            Doug Rupp  <rupp@adacore.com>
-            Olivier Hainque  <hainque@adacore.com>
+	    Doug Rupp  <rupp@adacore.com>
+	    Olivier Hainque  <hainque@adacore.com>
 
 	* config.host (arm-wrs-vxworks*): Rework to handle arm-wrs-vxworks7
 	as well as arm-wrs-vxworks.
@@ -712,10 +826,10 @@
 	    Matthieu Sarter  <matthieu.sarter.external@atos.net>
 	    David Edelsohn  <dje.gcc@gmail.com>
 
-        * config/rs6000/aix-unwind.h (MD_FALLBACK_FRAME_STATE_FOR): Define
-        unconditionally.
-        (ucontext_for): Add 64-bit AIX 6.1, 7.1, 7.2 support.  Add 32-bit
-        AIX 7.2 support.
+	* config/rs6000/aix-unwind.h (MD_FALLBACK_FRAME_STATE_FOR): Define
+	unconditionally.
+	(ucontext_for): Add 64-bit AIX 6.1, 7.1, 7.2 support.  Add 32-bit
+	AIX 7.2 support.
 
 2017-06-02  Olivier Hainque  <hainque@adacore.com>
 

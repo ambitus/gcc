@@ -25,14 +25,14 @@
 
 (define_insn "*neon_mov<mode>"
   [(set (match_operand:VDX 0 "nonimmediate_operand"
-	  "=w,Un,w, w,  ?r,?w,?r,?r, ?Us")
+	  "=w,Un,w, w, w,  ?r,?w,?r,?r, ?Us")
 	(match_operand:VDX 1 "general_operand"
-	  " w,w, Dn,Uni, w, r, r, Usi,r"))]
+	  " w,w, Dm,Dn,Uni, w, r, r, Usi,r"))]
   "TARGET_NEON
    && (register_operand (operands[0], <MODE>mode)
        || register_operand (operands[1], <MODE>mode))"
 {
-  if (which_alternative == 2)
+  if (which_alternative == 2 || which_alternative == 3)
     {
       int width, is_valid;
       static char templ[40];
@@ -53,31 +53,32 @@
   switch (which_alternative)
     {
     case 0: return "vmov\t%P0, %P1  @ <mode>";
-    case 1: case 3: return output_move_neon (operands);
-    case 2: gcc_unreachable ();
-    case 4: return "vmov\t%Q0, %R0, %P1  @ <mode>";
-    case 5: return "vmov\t%P0, %Q1, %R1  @ <mode>";
+    case 1: case 4: return output_move_neon (operands);
+    case 2: case 3: gcc_unreachable ();
+    case 5: return "vmov\t%Q0, %R0, %P1  @ <mode>";
+    case 6: return "vmov\t%P0, %Q1, %R1  @ <mode>";
     default: return output_move_double (operands, true, NULL);
     }
 }
  [(set_attr "type" "neon_move<q>,neon_store1_1reg,neon_move<q>,\
-                    neon_load1_1reg, neon_to_gp<q>,neon_from_gp<q>,mov_reg,\
-                    neon_load1_2reg, neon_store1_2reg")
-  (set_attr "length" "4,4,4,4,4,4,8,8,8")
-  (set_attr "arm_pool_range"     "*,*,*,1020,*,*,*,1020,*")
-  (set_attr "thumb2_pool_range"     "*,*,*,1018,*,*,*,1018,*")
-  (set_attr "neg_pool_range" "*,*,*,1004,*,*,*,1004,*")])
+                    neon_move<q>,neon_load1_1reg, neon_to_gp<q>,\
+		    neon_from_gp<q>,mov_reg,neon_load1_2reg,\
+		    neon_store1_2reg")
+  (set_attr "length" "4,4,4,4,4,4,4,8,8,8")
+  (set_attr "arm_pool_range"     "*,*,*,*,1020,*,*,*,1020,*")
+  (set_attr "thumb2_pool_range"     "*,*,*,*,1018,*,*,*,1018,*")
+  (set_attr "neg_pool_range" "*,*,*,*,1004,*,*,*,1004,*")])
 
 (define_insn "*neon_mov<mode>"
   [(set (match_operand:VQXMOV 0 "nonimmediate_operand"
-  	  "=w,Un,w, w,  ?r,?w,?r,?r,  ?Us")
+	  "=w,Un,w, w, w,  ?r,?w,?r,?r,  ?Us")
 	(match_operand:VQXMOV 1 "general_operand"
-	  " w,w, Dn,Uni, w, r, r, Usi, r"))]
+	  " w,w, Dm,DN,Uni, w, r, r, Usi, r"))]
   "TARGET_NEON
    && (register_operand (operands[0], <MODE>mode)
        || register_operand (operands[1], <MODE>mode))"
 {
-  if (which_alternative == 2)
+  if (which_alternative == 2 || which_alternative == 3)
     {
       int width, is_valid;
       static char templ[40];
@@ -98,20 +99,27 @@
   switch (which_alternative)
     {
     case 0: return "vmov\t%q0, %q1  @ <mode>";
-    case 1: case 3: return output_move_neon (operands);
-    case 2: gcc_unreachable ();
-    case 4: return "vmov\t%Q0, %R0, %e1  @ <mode>\;vmov\t%J0, %K0, %f1";
-    case 5: return "vmov\t%e0, %Q1, %R1  @ <mode>\;vmov\t%f0, %J1, %K1";
+    case 1: case 4: return output_move_neon (operands);
+    case 2: case 3: gcc_unreachable ();
+    case 5: return "vmov\t%Q0, %R0, %e1  @ <mode>\;vmov\t%J0, %K0, %f1";
+    case 6: return "vmov\t%e0, %Q1, %R1  @ <mode>\;vmov\t%f0, %J1, %K1";
     default: return output_move_quad (operands);
     }
 }
   [(set_attr "type" "neon_move_q,neon_store2_2reg_q,neon_move_q,\
-                     neon_load2_2reg_q,neon_to_gp_q,neon_from_gp_q,\
-                     mov_reg,neon_load1_4reg,neon_store1_4reg")
-   (set_attr "length" "4,8,4,8,8,8,16,8,16")
-   (set_attr "arm_pool_range" "*,*,*,1020,*,*,*,1020,*")
-   (set_attr "thumb2_pool_range" "*,*,*,1018,*,*,*,1018,*")
-   (set_attr "neg_pool_range" "*,*,*,996,*,*,*,996,*")])
+                     neon_move_q,neon_load2_2reg_q,neon_to_gp_q,\
+                     neon_from_gp_q,mov_reg,neon_load1_4reg,neon_store1_4reg")
+   (set_attr "length" "4,8,4,4,8,8,8,16,8,16")
+   (set_attr "arm_pool_range" "*,*,*,*,1020,*,*,*,1020,*")
+   (set_attr "thumb2_pool_range" "*,*,*,*,1018,*,*,*,1018,*")
+   (set_attr "neg_pool_range" "*,*,*,*,996,*,*,*,996,*")])
+
+/* We define these mov expanders to match the standard mov$a optab to prevent
+   the mid-end from trying to do a subreg for these modes which is the most
+   inefficient way to expand the move.  Also big-endian subreg's aren't
+   allowed for a subset of modes, See TARGET_CAN_CHANGE_MODE_CLASS.
+   Without these RTL generation patterns the mid-end would attempt to take a
+   sub-reg and may ICE if it can't.  */
 
 (define_expand "movti"
   [(set (match_operand:TI 0 "nonimmediate_operand" "")
@@ -137,33 +145,15 @@
     }
 })
 
-(define_expand "movv4hf"
-  [(set (match_operand:V4HF 0 "s_register_operand")
-	(match_operand:V4HF 1 "s_register_operand"))]
-  "TARGET_NEON && TARGET_FP16"
+(define_expand "mov<mode>"
+  [(set (match_operand:VH 0 "s_register_operand")
+	(match_operand:VH 1 "s_register_operand"))]
+  "TARGET_NEON"
 {
-  /* We need to use force_reg to avoid TARGET_CAN_CHANGE_MODE_CLASS
-     causing an ICE on big-endian because it cannot extract subregs in
-     this case.  */
   if (can_create_pseudo_p ())
     {
       if (!REG_P (operands[0]))
-	operands[1] = force_reg (V4HFmode, operands[1]);
-    }
-})
-
-(define_expand "movv8hf"
-  [(set (match_operand:V8HF 0 "")
-	(match_operand:V8HF 1 ""))]
-  "TARGET_NEON && TARGET_FP16"
-{ 
-  /* We need to use force_reg to avoid TARGET_CAN_CHANGE_MODE_CLASS
-     causing an ICE on big-endian because it cannot extract subregs in
-     this case.  */
-  if (can_create_pseudo_p ())
-    {
-      if (!REG_P (operands[0]))
-	operands[1] = force_reg (V8HFmode, operands[1]);
+	operands[1] = force_reg (<MODE>mode, operands[1]);
     }
 })
 
@@ -1044,7 +1034,7 @@
 (define_insn "vashl<mode>3"
   [(set (match_operand:VDQIW 0 "s_register_operand" "=w,w")
 	(ashift:VDQIW (match_operand:VDQIW 1 "s_register_operand" "w,w")
-		      (match_operand:VDQIW 2 "imm_lshift_or_reg_neon" "w,Dn")))]
+		      (match_operand:VDQIW 2 "imm_lshift_or_reg_neon" "w,Dm")))]
   "TARGET_NEON"
   {
     switch (which_alternative)
@@ -1063,7 +1053,7 @@
 (define_insn "vashr<mode>3_imm"
   [(set (match_operand:VDQIW 0 "s_register_operand" "=w")
 	(ashiftrt:VDQIW (match_operand:VDQIW 1 "s_register_operand" "w")
-			(match_operand:VDQIW 2 "imm_for_neon_rshift_operand" "Dn")))]
+			(match_operand:VDQIW 2 "imm_for_neon_rshift_operand" "Dm")))]
   "TARGET_NEON"
   {
     return neon_output_shift_immediate ("vshr", 's', &operands[2],
@@ -1076,7 +1066,7 @@
 (define_insn "vlshr<mode>3_imm"
   [(set (match_operand:VDQIW 0 "s_register_operand" "=w")
 	(lshiftrt:VDQIW (match_operand:VDQIW 1 "s_register_operand" "w")
-			(match_operand:VDQIW 2 "imm_for_neon_rshift_operand" "Dn")))]
+			(match_operand:VDQIW 2 "imm_for_neon_rshift_operand" "Dm")))]
   "TARGET_NEON"
   {
     return neon_output_shift_immediate ("vshr", 'u', &operands[2],

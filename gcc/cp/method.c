@@ -1144,11 +1144,11 @@ static tree
 constructible_expr (tree to, tree from)
 {
   tree expr;
+  cp_unevaluated cp_uneval_guard;
   if (CLASS_TYPE_P (to))
     {
       tree ctype = to;
       vec<tree, va_gc> *args = NULL;
-      cp_unevaluated cp_uneval_guard;
       if (TREE_CODE (to) != REFERENCE_TYPE)
 	to = cp_build_reference_type (to, /*rval*/false);
       tree ob = build_stub_object (to);
@@ -1201,6 +1201,8 @@ is_xible_helper (enum tree_code code, tree to, tree from, bool trivial)
     expr = assignable_expr (to, from);
   else if (trivial && from && TREE_CHAIN (from))
     return error_mark_node; // only 0- and 1-argument ctors can be trivial
+  else if (TREE_CODE (to) == ARRAY_TYPE && !TYPE_DOMAIN (to))
+    return error_mark_node; // can't construct an array of unknown bound
   else
     expr = constructible_expr (to, from);
   return expr;
@@ -1843,8 +1845,12 @@ maybe_explain_implicit_delete (tree decl)
       if (!informed)
 	{
 	  tree parms = FUNCTION_FIRST_USER_PARMTYPE (decl);
-	  tree parm_type = TREE_VALUE (parms);
-	  bool const_p = CP_TYPE_CONST_P (non_reference (parm_type));
+	  bool const_p = false;
+	  if (parms)
+	    {
+	      tree parm_type = TREE_VALUE (parms);
+	      const_p = CP_TYPE_CONST_P (non_reference (parm_type));
+	    }
 	  tree raises = NULL_TREE;
 	  bool deleted_p = false;
 	  tree scope = push_scope (ctype);
@@ -2405,7 +2411,7 @@ lazily_declare_fn (special_function_kind sfk, tree type)
 
   /* Add it to the class  */
   bool added = add_method (type, fn, false);
-  gcc_assert (added);
+  gcc_assert (added || errorcount);
 
   /* Add it to TYPE_FIELDS.  */
   if (sfk == sfk_destructor

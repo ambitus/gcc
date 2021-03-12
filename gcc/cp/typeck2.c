@@ -1142,8 +1142,29 @@ digest_init_r (tree type, tree init, int nested, int flags,
     {
       tree elt = CONSTRUCTOR_ELT (init, 0)->value;
       if (reference_related_p (type, TREE_TYPE (elt)))
-	/* We should have fixed this in reshape_init.  */
-	gcc_unreachable ();
+	{
+	  /* In C++17, aggregates can have bases, thus participate in
+	     aggregate initialization.  In the following case:
+
+	       struct B { int c; };
+	       struct D : B { };
+	       D d{{D{{42}}}};
+
+	    there's an extra set of braces, so the D temporary initializes
+	    the first element of d, which is the B base subobject.  The base
+	    of type B is copy-initialized from the D temporary, causing
+	    object slicing.  */
+	  tree field = next_initializable_field (TYPE_FIELDS (type));
+	  if (field && DECL_FIELD_IS_BASE (field))
+	    {
+	      if (warning_at (loc, 0, "initializing a base class of type %qT "
+			      "results in object slicing", TREE_TYPE (field)))
+		inform (loc, "remove %<{ }%> around initializer");
+	    }
+	  else
+	    /* We should have fixed this in reshape_init.  */
+	    gcc_unreachable ();
+	}
     }
 
   if (BRACE_ENCLOSED_INITIALIZER_P (init)
@@ -1537,6 +1558,13 @@ process_init_constructor_record (tree type, tree init, int nested,
 	      continue;
 	    }
 	}
+
+      if (DECL_SIZE (field) && integer_zerop (DECL_SIZE (field))
+	  && !TREE_SIDE_EFFECTS (next))
+	/* Don't add trivial initialization of an empty base/field to the
+	   constructor, as they might not be ordered the way the back-end
+	   expects.  */
+	continue;
 
       /* If this is a bitfield, now convert to the lowered type.  */
       if (type != TREE_TYPE (field))

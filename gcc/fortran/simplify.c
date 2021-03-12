@@ -169,8 +169,10 @@ convert_mpz_to_unsigned (mpz_t x, int bitsize)
     }
   else
     {
-      /* Confirm that no bits above the signed range are set.  */
-      gcc_assert (mpz_scan1 (x, bitsize-1) == ULONG_MAX);
+      /* Confirm that no bits above the signed range are set if we
+	 are doing range checking.  */
+      if (flag_range_check != 0)
+	gcc_assert (mpz_scan1 (x, bitsize-1) == ULONG_MAX);
     }
 }
 
@@ -4469,7 +4471,7 @@ gfc_simplify_len (gfc_expr *e, gfc_expr *kind)
     /* The expression in assoc->target points to a ref to the _data component
        of the unlimited polymorphic entity.  To get the _len component the last
        _data ref needs to be stripped and a ref to the _len component added.  */
-    return gfc_get_len_component (e->symtree->n.sym->assoc->target);
+    return gfc_get_len_component (e->symtree->n.sym->assoc->target, k);
   else
     return NULL;
 }
@@ -5509,52 +5511,55 @@ gfc_simplify_modulo (gfc_expr *a, gfc_expr *p)
   gfc_expr *result;
   int kind;
 
-  if (a->expr_type != EXPR_CONSTANT || p->expr_type != EXPR_CONSTANT)
+  /* First check p.  */
+  if (p->expr_type != EXPR_CONSTANT)
+    return NULL;
+
+  /* p shall not be 0.  */
+  switch (p->ts.type)
+    {
+      case BT_INTEGER:
+	if (mpz_cmp_ui (p->value.integer, 0) == 0)
+	  {
+	    gfc_error ("Argument %qs of MODULO at %L shall not be zero",
+			"P", &p->where);
+	    return &gfc_bad_expr;
+	  }
+	break;
+      case BT_REAL:
+	if (mpfr_cmp_ui (p->value.real, 0) == 0)
+	  {
+	    gfc_error ("Argument %qs of MODULO at %L shall not be zero",
+			"P", &p->where);
+	    return &gfc_bad_expr;
+	  }
+	break;
+      default:
+	gfc_internal_error ("gfc_simplify_modulo(): Bad arguments");
+    }
+
+  if (a->expr_type != EXPR_CONSTANT)
     return NULL;
 
   kind = a->ts.kind > p->ts.kind ? a->ts.kind : p->ts.kind;
   result = gfc_get_constant_expr (a->ts.type, kind, &a->where);
 
-  switch (a->ts.type)
-    {
-      case BT_INTEGER:
-	if (mpz_cmp_ui (p->value.integer, 0) == 0)
-	  {
-	    /* Result is processor-dependent. This processor just opts
-	      to not handle it at all.  */
-	    gfc_error ("Second argument of MODULO at %L is zero", &a->where);
-	    gfc_free_expr (result);
-	    return &gfc_bad_expr;
-	  }
+  if (a->ts.type == BT_INTEGER)
 	mpz_fdiv_r (result->value.integer, a->value.integer, p->value.integer);
-
-	break;
-
-      case BT_REAL:
-	if (mpfr_cmp_ui (p->value.real, 0) == 0)
-	  {
-	    /* Result is processor-dependent.  */
-	    gfc_error ("Second argument of MODULO at %L is zero", &p->where);
-	    gfc_free_expr (result);
-	    return &gfc_bad_expr;
-	  }
-
-	gfc_set_model_kind (kind);
-	mpfr_fmod (result->value.real, a->value.real, p->value.real,
-		   GFC_RND_MODE);
-	if (mpfr_cmp_ui (result->value.real, 0) != 0)
-	  {
-	    if (mpfr_signbit (a->value.real) != mpfr_signbit (p->value.real))
-	      mpfr_add (result->value.real, result->value.real, p->value.real,
-			GFC_RND_MODE);
-	  }
-	else
-	  mpfr_copysign (result->value.real, result->value.real,
-			 p->value.real, GFC_RND_MODE);
-	break;
-
-      default:
-	gfc_internal_error ("gfc_simplify_modulo(): Bad arguments");
+  else
+    {
+      gfc_set_model_kind (kind);
+      mpfr_fmod (result->value.real, a->value.real, p->value.real,
+                 GFC_RND_MODE);
+      if (mpfr_cmp_ui (result->value.real, 0) != 0)
+        {
+          if (mpfr_signbit (a->value.real) != mpfr_signbit (p->value.real))
+            mpfr_add (result->value.real, result->value.real, p->value.real,
+                      GFC_RND_MODE);
+	    }
+	  else
+        mpfr_copysign (result->value.real, result->value.real,
+                       p->value.real, GFC_RND_MODE);
     }
 
   return range_check (result, "MODULO");
@@ -6918,6 +6923,7 @@ gfc_simplify_sizeof (gfc_expr *x)
 {
   gfc_expr *result = NULL;
   mpz_t array_size;
+  size_t res_size;
 
   if (x->ts.type == BT_CLASS || x->ts.deferred)
     return NULL;
@@ -6933,7 +6939,8 @@ gfc_simplify_sizeof (gfc_expr *x)
 
   result = gfc_get_constant_expr (BT_INTEGER, gfc_index_integer_kind,
 				  &x->where);
-  mpz_set_si (result->value.integer, gfc_target_expr_size (x));
+  gfc_target_expr_size (x, &res_size);
+  mpz_set_si (result->value.integer, res_size);
 
   return result;
 }
@@ -6947,6 +6954,7 @@ gfc_simplify_storage_size (gfc_expr *x,
 {
   gfc_expr *result = NULL;
   int k;
+  size_t siz;
 
   if (x->ts.type == BT_CLASS || x->ts.deferred)
     return NULL;
@@ -6962,7 +6970,8 @@ gfc_simplify_storage_size (gfc_expr *x,
 
   result = gfc_get_constant_expr (BT_INTEGER, k, &x->where);
 
-  mpz_set_si (result->value.integer, gfc_element_size (x));
+  gfc_element_size (x, &siz);
+  mpz_set_si (result->value.integer, siz);
   mpz_mul_ui (result->value.integer, result->value.integer, BITS_PER_UNIT);
 
   return range_check (result, "STORAGE_SIZE");
@@ -7995,7 +8004,7 @@ gfc_convert_constant (gfc_expr *e, bt type, int kind)
 
     default:
     oops:
-      gfc_internal_error ("gfc_convert_constant(): Unexpected type");
+      return &gfc_bad_expr;
     }
 
   result = NULL;

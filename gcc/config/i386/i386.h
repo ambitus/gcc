@@ -621,7 +621,7 @@ extern tree x86_mfence;
 /* Replace MACH-O, ifdefs by in-line tests, where possible. 
    (a) Macros defined in config/i386/darwin.h  */
 #define TARGET_MACHO 0
-#define TARGET_MACHO_BRANCH_ISLANDS 0
+#define TARGET_MACHO_SYMBOL_STUBS 0
 #define MACHOPIC_ATT_STUB 0
 /* (b) Macros defined in config/darwin.h  */
 #define MACHO_DYNAMIC_NO_PIC_P 0
@@ -790,8 +790,7 @@ extern const char *host_detect_local_cpu (int argc, const char **argv);
 #define PARM_BOUNDARY BITS_PER_WORD
 
 /* Boundary (in *bits*) on which stack pointer should be aligned.  */
-#define STACK_BOUNDARY \
- (TARGET_64BIT && ix86_abi == MS_ABI ? 128 : BITS_PER_WORD)
+#define STACK_BOUNDARY (TARGET_64BIT_MS_ABI ? 128 : BITS_PER_WORD)
 
 /* Stack boundary of the main function guaranteed by OS.  */
 #define MAIN_STACK_BOUNDARY (TARGET_64BIT ? 128 : 32)
@@ -1536,10 +1535,10 @@ enum reg_class
 #define FIRST_FLOAT_REG FIRST_STACK_REG
 #define STACK_TOP_P(X) (REG_P (X) && REGNO (X) == FIRST_FLOAT_REG)
 
-#define SSE_REGNO(N) \
-  ((N) < 8 ? FIRST_SSE_REG + (N) \
-         : (N) <= LAST_REX_SSE_REG ? (FIRST_REX_SSE_REG + (N) - 8) \
-                                   : (FIRST_EXT_REX_SSE_REG + (N) - 16))
+#define GET_SSE_REGNO(N)			\
+  ((N) < 8 ? FIRST_SSE_REG + (N)		\
+   : (N) < 16 ? FIRST_REX_SSE_REG + (N) - 8	\
+   : FIRST_EXT_REX_SSE_REG + (N) - 16)
 
 /* The class value for index registers, and the one for base regs.  */
 
@@ -2634,6 +2633,9 @@ struct GTY(()) machine_function {
 
   /* Nonzero if the function places outgoing arguments on stack.  */
   BOOL_BITFIELD outgoing_args_on_stack : 1;
+
+  /* If true, ENDBR is queued at function entrance.  */
+  BOOL_BITFIELD endbr_queued_at_entrance : 1;
 
   /* The largest alignment, in bytes, of stack slot actually used.  */
   unsigned int max_used_stack_alignment;
